@@ -27,12 +27,14 @@
  */
 
 #include <QMaemo5InformationBox>
-#include <QMaemo5Style>
 #include <QApplication>
 #include <QClipboard>
-#include <QMouseEvent>
+#include <QContextMenuEvent>
+#include <QDesktopServices>
+#include <QScroller>
 #include <QTimer>
 #include <QMenu>
+#include <QUrl>
 
 #include "globalconstants.h"
 #include "chatimageitem.h"
@@ -40,12 +42,9 @@
 #include "client.h"
 #include "chatarea.h"
 
-#include "Whatsapp/util/datetimeutilities.h"
-#include "Whatsapp/util/utilities.h"
+#include "util/datetimeutilities.h"
+#include "util/utilities.h"
 
-#include "Dbus/dbusnokiaossobrowserif.h"
-
-#include "globalconstants.h"
 
 ChatArea::ChatArea(QWidget *parent) :
     QScrollArea(parent)
@@ -73,6 +72,11 @@ void ChatArea::init()
             this,SLOT(contextMenu(QPoint, QObject*)));
 
     loadingMessages = false;
+    atBottom = true;
+    widgetAtBottom = 0;
+
+    // Kinetic scrolling like Maemo 5
+    QScroller::grabGesture(viewport(), QScroller::LeftMouseButtonGesture);
 }
 
 void ChatArea::sliderMoved(int value)
@@ -148,10 +152,6 @@ void ChatArea::insertBodyMessage(FMessage message, bool atTop)
 void ChatArea::insertMediaMessage(FMessage message, bool atTop)
 {
 
-    if (message.media_wa_type == FMessage::Image ||
-        message.media_wa_type == FMessage::Video ||
-        message.media_wa_type == FMessage::Audio ||
-        message.media_wa_type == FMessage::Location)
     {
         ChatImageItem *imageItem = new ChatImageItem(message,container);
         imageItem->installEventFilter(this);
@@ -162,10 +162,6 @@ void ChatArea::insertMediaMessage(FMessage message, bool atTop)
                 this,SLOT(mediaDownloadHandler(FMessage)));
         connect(imageItem,SIGNAL(mediaUpload(FMessage)),
                 this,SLOT(mediaUploadHandler(FMessage)));
-
-        if (message.live)
-            connect(imageItem,SIGNAL(voiceNotePlayed(FMessage)),
-                    this,SLOT(voiceNotePlayedHandler(FMessage)));
 
         insertWidget(message.key, atTop, imageItem);
     }
@@ -190,23 +186,20 @@ void ChatArea::updateStatus(FMessage message)
 {
     if (widgets.contains(message.key))
     {
-        if (message.type == FMessage::BodyMessage)
-        {
-            ChatTextItem *label = (ChatTextItem *)widgets.value(message.key);
-            label->setMessage(message);
-        }
-        else if (message.type == FMessage::MediaMessage)
-        {
-            ChatImageItem *label = (ChatImageItem *)widgets.value(message.key);
-            label->setTimestamp(message);
-        }
+        // Only the status changes: receipts carry no message content
+        QWidget *widget = widgets.value(message.key);
+
+        if (widget->objectName() == "ChatTextItem")
+            ((ChatTextItem *) widget)->setStatus(message.status);
+        else if (widget->objectName() == "ChatImageItem")
+            ((ChatImageItem *) widget)->setStatus(message.status);
 
     }
 }
 
 void ChatArea::updateProgress(FMessage message, float p)
 {
-    if (widgets.contains(message.key) && message.type == FMessage::MediaMessage)
+    if (widgets.contains(message.key) && widgets.value(message.key)->objectName() == "ChatImageItem")
     {
         ChatImageItem *label = (ChatImageItem *)widgets.value(message.key);
         label->updateProgress(p);
@@ -215,7 +208,7 @@ void ChatArea::updateProgress(FMessage message, float p)
 
 void ChatArea::updateUri(FMessage message)
 {
-    if (widgets.contains(message.key) && message.type == FMessage::MediaMessage)
+    if (widgets.contains(message.key) && widgets.value(message.key)->objectName() == "ChatImageItem")
     {
         ChatImageItem *label = (ChatImageItem *)widgets.value(message.key);
         label->updateUri(message.local_file_uri);
@@ -224,7 +217,7 @@ void ChatArea::updateUri(FMessage message)
 
 void ChatArea::updateImage(FMessage message)
 {
-    if (widgets.contains(message.key) && message.type == FMessage::MediaMessage)
+    if (widgets.contains(message.key) && widgets.value(message.key)->objectName() == "ChatImageItem")
     {
         ChatImageItem *label = (ChatImageItem *)widgets.value(message.key);
         label->updateImage(message);
@@ -234,7 +227,7 @@ void ChatArea::updateImage(FMessage message)
 
 void ChatArea::resetButton(FMessage message)
 {
-    if (widgets.contains(message.key) && message.type == FMessage::MediaMessage)
+    if (widgets.contains(message.key) && widgets.value(message.key)->objectName() == "ChatImageItem")
     {
         ChatImageItem *label = (ChatImageItem *)widgets.value(message.key);
         label->resetButton();
@@ -300,8 +293,8 @@ void ChatArea::deleteAllMessages()
         delete widget;
     }
 
-    //viewport()->hide();
     widgetList.clear();
+    widgets.clear();
 }
 
 void ChatArea::requestUpdateTimestamps()
@@ -330,8 +323,8 @@ bool ChatArea::eventFilter(QObject *obj, QEvent *event)
     {
         if (obj->objectName() == "ChatTextItem" || obj->objectName() == "ChatImageItem")
         {
-            QMouseEvent *mouseEvent = static_cast<QMouseEvent*> (event);
-            emit contextMenuRequested(mouseEvent->globalPos(), obj);
+            QContextMenuEvent *menuEvent = static_cast<QContextMenuEvent*> (event);
+            emit contextMenuRequested(menuEvent->globalPos(), obj);
             return true;
         }
     }
@@ -348,7 +341,7 @@ void ChatArea::contextMenu(QPoint p, QObject *obj)
     QAction *copy = new QAction("Copy",this);
     QAction *forward = new QAction("Forward", this);
     QAction *deletemsg = new QAction("Delete", this);
-    QAction *browser = new QAction("Open in browser", this);
+    QAction *browser = new QAction("Open file", this);
 
     if (obj->objectName() == "ChatTextItem")
         menu->addAction(copy);
@@ -396,14 +389,7 @@ void ChatArea::contextMenu(QPoint p, QObject *obj)
         ChatImageItem *item = (ChatImageItem *) obj;
         FMessage msg = item->getMessage();
 
-        QDBusConnection dbus = QDBusConnection::sessionBus();
-
-        DBusNokiaOssoBrowserIf *browserBus =
-        new DBusNokiaOssoBrowserIf(NOKIA_OSSO_BROWSER_DBUS_NAME,
-                                   NOKIA_OSSO_BROWSER_DBUS_PATH,
-                                   dbus,this);
-
-        browserBus->load_url("file://" + msg.local_file_uri);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(msg.local_file_uri));
     }
     else if (action == deletemsg)
     {
@@ -413,16 +399,20 @@ void ChatArea::contextMenu(QPoint p, QObject *obj)
             ChatTextItem *item = (ChatTextItem *) obj;
             msg = item->getMessage();
             grid->removeWidget(item);
-            delete item;
+            widgets.remove(msg.key);
+            widgetList.removeAll(item);
+            item->deleteLater();
         }
         else if (obj->objectName() == "ChatImageItem")
         {
             ChatImageItem *item = (ChatImageItem *) obj;
             msg = item->getMessage();
             grid->removeWidget(item);
-            delete item;
+            widgets.remove(msg.key);
+            widgetList.removeAll(item);
+            item->deleteLater();
         }
         emit deleteMessage(msg);
     }
-    Utilities::logData("Exit Menu");
+    menu->deleteLater();
 }

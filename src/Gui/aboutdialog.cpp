@@ -43,7 +43,6 @@ AboutDialog::AboutDialog(QWidget *parent) :
 
     ui->version->setText(FULL_VERSION);
 
-    connect(ui->donateButton,SIGNAL(released()),this,SLOT(donateAction()));
 }
 
 AboutDialog::~AboutDialog()
@@ -51,7 +50,4 @@ AboutDialog::~AboutDialog()
     delete ui;
 }
 
-void AboutDialog::donateAction()
-{
-    QDesktopServices::openUrl(QUrl(DONATE_URL));
-}
+

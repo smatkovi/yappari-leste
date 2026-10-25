@@ -26,19 +26,11 @@
  * official policies, either expressed or implied, of the copyright holder.
  */
 
-#include <QtGui/QApplication>
-#include <QTcpSocket>
-#include <QtDebug>
-
-#include <QtDBus/QDBusReply>
-
+#include <QApplication>
 #include <QMessageBox>
-
-#include <gst/gst.h>
-
-#include "Dbus/dbusif.h"
-
-#include "Whatsapp/util/utilities.h"
+#include <QDBusConnection>
+#include <QDBusConnectionInterface>
+#include <QDBusMessage>
 
 #include "client.h"
 #include "version.h"
@@ -49,53 +41,37 @@ int main(int argc, char *argv[])
     QApplication a(argc,argv);
     Client *client = 0;
     int retval = 0;
-    bool root = false;
 
-    //Initialize GStreamer
-    gst_init(&argc, &argv);
-
-    QString username = qgetenv("USER");
-    if (username == "root")
+    if (qgetenv("USER") == "root")
     {
         QMessageBox msg;
 
         msg.setText("You can't run this application as root.");
         msg.exec();
 
-        root = true;
-        retval = -1;
+        return -1;
     }
 
-    if (!root)
+    a.setApplicationName(YAPPARI_APPLICATION_NAME);
+    a.setApplicationVersion(VERSION);
+    a.setQuitOnLastWindowClosed(false);
+
+    // Check that Yappari isn't already running. Ask the bus (this does not
+    // start Yappari through D-Bus activation) and show the running one.
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (bus.interface() && bus.interface()->isServiceRegistered(YAPPARI_SERVICE))
     {
-
-        a.setApplicationName(YAPPARI_APPLICATION_NAME);
-        a.setApplicationVersion(FULL_VERSION);
-        a.setQuitOnLastWindowClosed(false);
-
-        // Check that yappari isn't already running
-        DBusIf *app = new DBusIf(YAPPARI_SERVICE,YAPPARI_OBJECT,QDBusConnection::sessionBus());
-        QDBusReply<bool> reply = app->isRunning();
-
-        if (!reply.isValid())
-        {
-            bool minimized = false;
-            foreach (QString arg, a.arguments())
-                if (arg == "-m")
-                    minimized = true;
-            client = new Client(minimized,&a);
-            retval = a.exec();
-            delete client;
-        }
-        else
-        {
-            app->ShowWindow();
-            retval = 1;
-        }
-
-       delete app;
-
+        QDBusMessage show = QDBusMessage::createMethodCall(YAPPARI_SERVICE, YAPPARI_OBJECT,
+                                                           YAPPARI_SERVICE, "ShowWindow");
+        bus.call(show, QDBus::Block, 5000);
+        return 1;
     }
+
+    bool minimized = a.arguments().contains("-m");
+
+    client = new Client(minimized,&a);
+    retval = a.exec();
+    delete client;
 
     return retval;
 }

@@ -38,22 +38,15 @@ public:
     Utilities();
 
     static void logData(QString s);
-    static QString decodeString(const char data[]);
-    static QString getChatPassword();
-    static QString getToken(QString phoneNumber);
     static QString WATextToHtml(QString data, int iconSize = 32, bool urlConversion = true);
     static QString htmlToWAText(QString html);
     static QString shortURL(QString url);
-    static QString guessMimeType(QString extension);
     static QString getExtension(QString filename);
-    static QString getPathFor(int media_wa_type, bool gallery);
     static QString formatBytes(qint64 bytes);
     static QString removeEmoji(QString data);
 
-private:
-    static void initEmojiMapping();
-
-    static QHash<quint32,bool> emojiMapping;
+    // $XDG_DATA_HOME/yappari (~/.local/share/yappari), created if needed
+    static QString dataDir();
 };
 
 #endif // UTILITIES_H

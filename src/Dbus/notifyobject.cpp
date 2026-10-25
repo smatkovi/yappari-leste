@@ -31,7 +31,7 @@
 
 #include "Gui/mainwindow.h"
 
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
 #include "notifyobject.h"
 #include "globalconstants.h"
@@ -85,7 +85,7 @@ void NotifyObject::sendNotify(QString contact, FMessage message)
     QVariantMap notifyHints;
     notifyHints.insert("category","yappari-message");
     notifyHints.insert("message-thread",message.key.remote_jid);
-    notifyHints.insert("presistent",true);
+    notifyHints.insert("persistent",true);
 
     QString text;
     if (message.type == FMessage::MediaMessage)
@@ -94,6 +94,9 @@ void NotifyObject::sendNotify(QString contact, FMessage message)
             text = "[voice note]";
         else
             text = "[" + message.getMediaWAType() + "]";
+
+        if (!message.media_caption.isEmpty())
+            text += " " + message.media_caption;
     }
     else
         text = QString::fromUtf8(message.data.constData());

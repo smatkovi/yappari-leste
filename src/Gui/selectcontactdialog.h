@@ -56,6 +56,7 @@ private:
     ContactSelectionModel *model;
 
     QString searchStr;
+    bool contextMenuEnabled;
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event);

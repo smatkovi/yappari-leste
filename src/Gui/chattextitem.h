@@ -31,7 +31,7 @@
 
 #include <QLabel>
 
-#include "Whatsapp/fmessage.h"
+#include "FMessage/fmessage.h"
 
 class ChatTextItem : public QLabel
 {
@@ -39,6 +39,7 @@ class ChatTextItem : public QLabel
 public:
     explicit ChatTextItem(FMessage message, QWidget *parent = 0);
     void setMessage(FMessage message);
+    void setStatus(int status);
     FMessage getMessage();
 
 private:

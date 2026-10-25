@@ -71,7 +71,9 @@ public:
         Location,
         Divider,
         System,
-        Voice
+        Voice,
+        Document,
+        Sticker
     };
 
     FMessage();
@@ -124,6 +126,7 @@ private:
     static QMutex mutex;
 
     void init(QString remote_jid, bool from_me);
+    void clearFields();
 };
 
 

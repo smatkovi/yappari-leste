@@ -114,10 +114,6 @@
         <property name="text">
          <string/>
         </property>
-        <property name="icon">
-         <iconset>
-          <normaloff>../../../../../../../../../../../usr/share/yappari/icons/48x48/81-23.png</normaloff>../../../../../../../../../../../usr/share/yappari/icons/48x48/81-23.png</iconset>
-        </property>
         <property name="iconSize">
          <size>
           <width>48</width>
@@ -172,10 +168,6 @@
           <height>16777215</height>
          </size>
         </property>
-        <property name="icon">
-         <iconset>
-          <normalon>../../../../../../../../../../../usr/share/yappari/icons/48x48/voice_overlay_icon.png</normalon>../../../../../../../../../../../usr/share/yappari/icons/48x48/voice_overlay_icon.png</iconset>
-        </property>
         <property name="iconSize">
          <size>
           <width>48</width>
@@ -220,11 +212,9 @@
     <property name="title">
      <string>Chat</string>
     </property>
-    <addaction name="actionViewContact"/>
     <addaction name="actionDeleteAll"/>
     <addaction name="actionSendMultimedia"/>
     <addaction name="actionMute"/>
-    <addaction name="actionBlock"/>
    </widget>
    <addaction name="chatMenu"/>
   </widget>
@@ -235,22 +225,12 @@
   </action>
   <action name="actionSendMultimedia">
    <property name="text">
-    <string>Send Multimedia</string>
+    <string>Send File</string>
    </property>
   </action>
   <action name="actionMute">
    <property name="text">
     <string>Mute</string>
-   </property>
-  </action>
-  <action name="actionViewContact">
-   <property name="text">
-    <string>View Contact</string>
-   </property>
-  </action>
-  <action name="actionBlock">
-   <property name="text">
-    <string>Block</string>
    </property>
   </action>
  </widget>

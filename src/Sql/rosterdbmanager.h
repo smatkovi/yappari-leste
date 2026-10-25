@@ -47,6 +47,7 @@ public:
     ~RosterDBManager();
 
     ContactList *getAllContacts();
+    void updateContacts(QList<Contact *> list);
 
 signals:
 
@@ -67,6 +68,8 @@ public slots:
 
 
 private:
+    void writeContact(Contact *c);
+
     QSqlDatabase db;
 
     void init();

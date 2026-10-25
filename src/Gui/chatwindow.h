@@ -30,15 +30,10 @@
 #define CHATWINDOW_H
 
 #include <QMainWindow>
-#include <QMutex>
 #include <QTimer>
 #include <QMap>
 
-#include "Whatsapp/fmessage.h"
-#include "Whatsapp/mediaupload.h"
-#include "Whatsapp/mediadownload.h"
-
-#include "Gui/selectemojiwidget.h"
+#include "FMessage/fmessage.h"
 
 #include "Contacts/contact.h"
 
@@ -67,6 +62,9 @@ public:
     FMessage lastMessage();
     void setMute(qint64 timestamp);
     void updateTimestamps();
+    void mediaDownloadFinished(FMessage msg);
+    void mediaDownloadError(FMessage msg, QString error);
+    void thumbnailReceived(FMessage msg);
 
 public slots:
     void readMoreLogLines();
@@ -77,59 +75,35 @@ public slots:
     void sendButtonClicked();
     void selectMultimediaMessage();
     void sendMultimediaMessage(QString fileName, int waType, bool live, QString caption);
-    void mediaUploadAccepted(FMessage msg);
-    void mediaUploadStarted(MediaUpload *mediaUpload, FMessage msg);
-    void mediaUploadFinished(MediaUpload *mediaUpload, FMessage msg);
-    void mediaDownloadFinished(MediaDownload *mediaDownload, FMessage msg);
     void mediaDownloadRequested(FMessage msg);
-    void mediaDownloadError(MediaDownload *mediaDownload, FMessage msg, int errorCode);
-    void sslErrorHandler(MediaUpload *mediaUpload);
-    void httpErrorHandler(MediaUpload *mediaUpload, QString error);
     void deleteAllMessages();
     void mute();
     void unmute();
-    void increaseUploadCounter(qint64 bytes);
-    void increaseDownloadCounter(qint64 bytes);
-    void requestPhotoUpdate(QString jid, QString photoId, bool largeFormat);
-    void viewContact();
-    void photoReceivedHandler(QImage photo, QString photoId);
-    void statusChanged(QString status);
-    void blockOrUnblock();
-    void setBlock(bool blocked);
-    void startRecording();
-    void finishedRecording(QString fileName, int lengthInSeconds);
-    void updateRecordingTime(int current);
-    void sendVoiceNotePlayed(FMessage message);
     void forwardMessageRequested(FMessage message);
     void deleteMessage(FMessage message);
+    void selectEmoji();
 
 signals:
     void logMessage(FMessage message);
     void updateLoggedMessage(FMessage message);
     void updateUriMessage(FMessage message);
-    void updateDuration(FMessage message);
     void sendMessage(FMessage message);
     void mute(QString jid,bool muted,qint64 muteExpireTimestamp);
-    void photoUpdate(QString jid, QString photoId, bool largeFormat);
-    void photoReceived(QImage photo, QString photoId);
-    void lastSeenUpdated();
-    void requestStatus(QString jid);
-    void userStatusChanged();
-    void blockOrUnblockContact(QString jid, bool blocked);
-    void voiceNotePlayed(FMessage message);
     void messageRead(FMessage message);
     void updateLastDir(int waType, QString dir);
     void forwardMessage(FMessage message);
+    void mediaDownload(FMessage message);
 
 private:
     bool isPeerComposing;
     bool isMyselfComposing;
-    bool isRecording;
     ChatLogger logger;
-    QMutex recordingMutex;
 
     bool muted;
     qint64 muteExpireTimestamp;
+
+    // Received messages not reported as read yet
+    QList<FMessage> unread;
 
     void showMessageInUI(FMessage& message);
 

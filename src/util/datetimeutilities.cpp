@@ -66,28 +66,21 @@ QString DateTimeUtilities::simpleDayFormat(qint64 d)
 
 QString DateTimeUtilities::shortDayFormat(qint64 d)
 {
-    QLocale locale = QLocale::system();
     QDateTime dt = QDateTime::fromMSecsSinceEpoch(d);
 
-    QString result = dt.toString(locale.dateFormat(QLocale::ShortFormat));
-    QString year = dt.toString("yy");
-
-    QRegExp sepreg("[0-9]+(.)[0-9]+");
-
-    sepreg.indexIn(result);
-
-    return (result + sepreg.cap(1) + year);
+    return QLocale::system().toString(dt.date(), QLocale::ShortFormat);
 }
 
 
 QString DateTimeUtilities::shortTimeFormat(qint64 d)
 {
-    QString timeFormat = QLocale::system().timeFormat();
+    QString timeFormat = QLocale::system().timeFormat(QLocale::ShortFormat);
     QDateTime dt = QDateTime::fromMSecsSinceEpoch(d);
 
     // Fix for a weird t at the end of the time format
     // also am/pm display
     timeFormat.replace(" t","");
+    timeFormat.remove(":ss");
     timeFormat.replace("AP","ap");
 
     return (dt.toString(timeFormat));

@@ -28,30 +28,27 @@
 
 #include <QMaemo5Style>
 
-// #include <QtMultimediaKit/QMediaPlayer>
-// #include <phonon/MediaObject>
-// #include <phonon/AudioOutput>
-
 #include <QDesktopServices>
 #include <QImageReader>
+#include <QFileInfo>
 #include <QPainter>
+#include <QTimer>
+#include <QUrl>
 
-#include "Whatsapp/util/datetimeutilities.h"
-#include "Whatsapp/util/utilities.h"
-
-#include "Dbus/dbusnokiaimageviewerif.h"
-#include "Dbus/dbusnokiamediaplayerif.h"
+#include "util/datetimeutilities.h"
+#include "util/utilities.h"
 
 #include "Multimedia/audioplayer.h"
 
 #include "globalconstants.h"
 #include "client.h"
 
+#include "imageviewer.h"
 #include "chatimageitem.h"
 #include "ui_chatimageitem.h"
 
-#include "libjpeg/jpeg-data.h"
-
+#define ICONS_DIR       "/usr/share/yappari/icons/100x100/"
+#define HILDON_ICONS    "/usr/share/icons/hicolor/48x48/hildon/"
 
 ChatImageItem::ChatImageItem(FMessage message, QWidget *parent) :
     QWidget(parent),
@@ -59,7 +56,7 @@ ChatImageItem::ChatImageItem(FMessage message, QWidget *parent) :
 {
     ui->setupUi(this);
 
-    waiting = retryButton = false;
+    waiting = downloading = autoDownload = false;
     this->message = message;
 
     setImage();
@@ -78,7 +75,9 @@ ChatImageItem::ChatImageItem(FMessage message, QWidget *parent) :
 
     setNickname(message);
     setTimestamp(message);
-    if(message.media_caption.length()>0) {
+
+    if (message.media_caption.length() > 0) {
+        ui->imageCaption->setWordWrap(true);
         ui->imageCaption->setText(message.media_caption);
     } else {
         ui->imageCaption->hide();
@@ -93,42 +92,65 @@ FMessage ChatImageItem::getMessage()
 void ChatImageItem::setImage()
 {
     QImage image;
+    int type = message.media_wa_type;
 
-    if (message.media_wa_type == FMessage::Audio)
-        image.load(
-                    (message.live)
-                        ? "/usr/share/yappari/icons/100x100/voice_overlay_icon.png"
-                        : "/usr/share/yappari/icons/100x100/audio_overlay_icon.png"
-                  );
-    else if (message.data.isEmpty() && message.media_wa_type == FMessage::Video)
-        image.load("/usr/share/yappari/icons/100x100/video_overlay_icon.png");
-    else
+    if (!message.data.isEmpty())
         image = QImage::fromData(message.data);
 
-    if (message.media_wa_type == FMessage::Image ||
-        message.media_wa_type == FMessage::Location)
+    if (image.isNull() && !message.local_file_uri.isEmpty() &&
+        (type == FMessage::Image || type == FMessage::Sticker))
+    {
+        QImageReader reader(message.local_file_uri);
+        reader.setAutoTransform(true);
+        QSize size = reader.size();
+        if (size.isValid())
+            reader.setScaledSize(size.scaled(PREVIEW_WIDTH, PREVIEW_HEIGHT, Qt::KeepAspectRatio));
+        image = reader.read();
+    }
+
+    if (image.isNull())
+    {
+        switch (type)
+        {
+            case FMessage::Audio:
+                image.load(message.live ? ICONS_DIR "voice_overlay_icon.png"
+                                        : ICONS_DIR "audio_overlay_icon.png");
+                break;
+
+            case FMessage::Video:
+                image.load(ICONS_DIR "video_overlay_icon.png");
+                break;
+
+            case FMessage::Location:
+                image.load(HILDON_ICONS "general_map.png");
+                break;
+
+            case FMessage::Document:
+                image.load(HILDON_ICONS "email_attachment.png");
+                break;
+
+            default:
+                break;
+        }
+    }
+    else if (image.width() > PREVIEW_WIDTH || image.height() > PREVIEW_HEIGHT)
+        image = image.scaled(PREVIEW_WIDTH, PREVIEW_HEIGHT, Qt::KeepAspectRatio,
+                             Qt::SmoothTransformation);
+
+    if (type != FMessage::Video && type != FMessage::Audio)
     {
         ui->image->setPixmap(QPixmap::fromImage(image));
         return;
     }
 
-
-    // We need an overlay for the video and the audio
-
-    // ToDo: PREVIEW MIGHT BE EMPTY!!!!
-
+    // Videos and audio get an overlay: play symbol, duration
 
     QSize size = (image.isNull()) ? QSize(100,100) : image.size();
 
     QImage imageWithOverlay = QImage(size, QImage::Format_ARGB32_Premultiplied);
-
-    QImage overlayImage;
-    if (message.media_wa_type == FMessage::Video)
-        overlayImage.load("/usr/share/yappari/icons/100x100/play_overlay_icon.png");
+    imageWithOverlay.fill(Qt::transparent);
 
     QPainter painter(&imageWithOverlay);
-    painter.setCompositionMode(QPainter::CompositionMode_Source);
-    painter.fillRect(image.rect(), Qt::transparent);
 
     if (!image.isNull())
     {
@@ -136,47 +158,35 @@ void ChatImageItem::setImage()
         painter.drawImage(0, 0, image);
     }
 
-    if (message.media_wa_type == FMessage::Video)
+    if (type == FMessage::Video && !message.data.isEmpty())
     {
+        QImage overlayImage(ICONS_DIR "play_overlay_icon.png");
         painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-        painter.drawImage(0, 0, overlayImage);
+        painter.drawImage((size.width() - overlayImage.width()) / 2,
+                          (size.height() - overlayImage.height()) / 2, overlayImage);
     }
-
-    QFont font = painter.font();
-    font.setPointSize(14);
-    font.setBold(true);
-
-    painter.setFont(font);
-
-    QPen pen(QColor(Qt::white));
-    painter.setPen(pen);
-
-    QRect rect = QRect(0, 80, 100, 20);
 
     if (message.media_duration_seconds > 0)
     {
-        QString duration;
+        QFont font = painter.font();
+        font.setPointSize(14);
+        font.setBold(true);
+        painter.setFont(font);
+        painter.setPen(QPen(QColor(Qt::white)));
+
         int minutes = message.media_duration_seconds / 60;
         int seconds = message.media_duration_seconds % 60;
-        painter.drawText(rect, Qt::AlignCenter,
-                         duration.sprintf("%02d:%02d",
-                         minutes,
-                         seconds));
+        painter.drawText(QRect(0, size.height() - 20, size.width(), 20), Qt::AlignCenter,
+                         QString::asprintf("%02d:%02d", minutes, seconds));
     }
     painter.end();
     ui->image->setPixmap(QPixmap::fromImage(imageWithOverlay));
-
-
 }
 
 
 void ChatImageItem::setNickname(FMessage message)
 {
-    bool from_me = message.key.from_me;
-
-    QString from = (from_me)
-            ? "You"
-            : message.notify_name.replace("<","&lt;").replace(">","&gt;");
+    QString from = Client::authorName(message);
 
     QColor color = QMaemo5Style::standardColor("ActiveTextColor");
     QString nickcolor = Client::nickcolor.isEmpty() ? color.name() : Client::nickcolor;
@@ -192,7 +202,7 @@ void ChatImageItem::setNickname(FMessage message)
                    ".nick { color:" + nickcolor + "; }"
                    "</style>"
                    "<span class=\"nick\">" +
-                   Utilities::WATextToHtml(from + ":",32) +
+                   Utilities::WATextToHtml(from + ":",32,false) +
                    "</span>&nbsp;";
 
     ui->nickname->setTextFormat(Qt::RichText);
@@ -224,11 +234,7 @@ void ChatImageItem::setTimestamp(FMessage message)
         html.append("<div align=\"right\">");
 
         if (message.status == FMessage::ReceivedByServer)
-        {
-            waiting = false;
-            ui->progressBar->hide();
             html.append(CHECK);
-        }
         else if (message.status == FMessage::ReceivedByTarget)
             html.append(DOUBLECHECK);
         else if (message.status == FMessage::ReadByTarget)
@@ -236,26 +242,20 @@ void ChatImageItem::setTimestamp(FMessage message)
         else if (message.status == FMessage::Played)
         {
             html.append(VOICEPLAYED);
-            html.append(DOUBLECHECK);
-        }
-        else if (message.status == FMessage::Uploading)
-        {
-            ui->progressBar->show();
-            html.append(UPLOADING);
+            html.append(DOUBLEBLUECHECK);
         }
         else
-           html.append(GRAYCHECK);
+            html.append(UPLOADING);
 
         html.append("</div>");
     }
 
     html.append("<div align=\"right\" style=\"font-size:18px;color:" + color.name() + "\">" + time +
                 "</div>");
-    if (waiting)
-    {
-        html.append("<div align=\"right\" style=\"font-size:14px;color:" + color.name() + ";\">Please wait...</div>");
-        html.append("<div align=\"right\" style=\"font-size:14px;color:" + color.name() + ";\">Might take several minutes</div>");
-    }
+
+    if (message.media_size > 0)
+        html.append("<div align=\"right\" style=\"font-size:14px;color:" + color.name() + "\">" +
+                    Utilities::formatBytes(message.media_size) + "</div>");
 
     ui->timestamp->setTextFormat(Qt::RichText);
     ui->timestamp->setAlignment(Qt::AlignTop);
@@ -266,145 +266,119 @@ void ChatImageItem::setTimestamp(FMessage message)
     this->message.timestamp = message.timestamp;
 }
 
+void ChatImageItem::setStatus(int status)
+{
+    if (status > message.status || !message.key.from_me)
+    {
+        message.status = (FMessage::Status) status;
+        setTimestamp(message);
+    }
+}
+
 void ChatImageItem::setButton()
 {
+    ui->viewImageButton->setEnabled(true);
+
     if (message.media_wa_type == FMessage::Location)
     {
         ui->nameLabel->setText(message.media_name);
         ui->nameLabel->show();
-        ui->viewImageButton->setText("Go");
-        ui->viewImageButton->setEnabled(true);
+        ui->viewImageButton->setText("Map");
     }
     else if (message.local_file_uri.isEmpty())
     {
         ui->viewImageButton->setText("Download");
-        if (message.media_size <= (Client::automaticDownloadBytes * 1024))
+
+        // Small pictures, stickers and voice notes come by themselves
+        bool small = message.media_size <= (Client::automaticDownloadBytes * 1024);
+        bool kind = message.media_wa_type == FMessage::Image ||
+                    message.media_wa_type == FMessage::Sticker ||
+                    (message.media_wa_type == FMessage::Audio && message.live);
+
+        if (small && kind && !downloading)
+        {
+            autoDownload = true;
             QTimer::singleShot(50,this,SLOT(downloadOrViewImage()));
+        }
     }
     else
     {
-        if (message.media_wa_type == FMessage::Image)
+        if (message.media_wa_type == FMessage::Document)
         {
-            if (message.key.from_me == true && message.status == FMessage::Unsent)
-            {
-                retryButton = true;
-                ui->viewImageButton->setText("Retry");
-            }
-            else
-                ui->viewImageButton->setText("View");
+            ui->nameLabel->setText(QFileInfo(message.local_file_uri).fileName());
+            ui->nameLabel->show();
         }
-        else
-            ui->viewImageButton->setText("Play");
-        ui->viewImageButton->setEnabled(true);
+
+        switch (message.media_wa_type)
+        {
+            case FMessage::Image:
+            case FMessage::Sticker:
+                ui->viewImageButton->setText("View");
+                break;
+
+            case FMessage::Audio:
+            case FMessage::Video:
+                ui->viewImageButton->setText("Play");
+                break;
+
+            default:
+                ui->viewImageButton->setText("Open");
+                break;
+        }
     }
 }
 
 ChatImageItem::~ChatImageItem()
 {
+    if (!player.isNull())
+        player->stop();
+
     delete ui;
 }
 
 void ChatImageItem::downloadOrViewImage()
 {
-    if (retryButton)
+    if (message.media_wa_type == FMessage::Location)
     {
-        message.status = FMessage::Uploading;
-        retryButton = false;
-        setButton();
-
-        emit mediaUpload(message);
-
-    } else if (message.media_wa_type == FMessage::Location)
-    {
-        QString url = (message.media_url.isEmpty())
-                ? URL_LOCATION_SHARING +
-                    QString::number(message.latitude) + "," +
-                    QString::number(message.longitude) + "+(" +
-                    message.notify_name.replace("<","&lt;").replace(">","&gt;") + ")"
-                : message.media_url;
+        QString url = URL_LOCATION_SHARING +
+                      QString::number(message.latitude, 'f', 6) + "," +
+                      QString::number(message.longitude, 'f', 6);
         QDesktopServices::openUrl(QUrl(url));
     }
     else if (!message.local_file_uri.isEmpty())
     {
-        QString uri = "file://" + message.local_file_uri;
-
-        QDBusConnection dbus = QDBusConnection::sessionBus();
-
-
         switch (message.media_wa_type)
         {
             case FMessage::Audio:
-                if (message.live)
+                if (!player.isNull())
                 {
-                    AudioPlayer *player = new AudioPlayer(this);
-
-                    connect(player,SIGNAL(progress(int)),this,SLOT(updateTime(int)));
-                    connect(player,SIGNAL(finished()),this,SLOT(finishedAudioPlay()));
-
-                    ui->viewImageButton->setEnabled(false);
-
-                    player->play(uri);
-
-                    // We need to notificate the sender that we played the audio
-                    emit voiceNotePlayed(message);
+                    player->stop();
                     break;
                 }
 
-            case FMessage::Video:
-                {
-                    DBusNokiaMediaPlayerIf *mediaPlayerBus =
-                            new DBusNokiaMediaPlayerIf(NOKIA_MEDIAPLAYER_DBUS_NAME,
-                                                       NOKIA_MEDIAPLAYER_DBUS_PATH,
-                                                       dbus,this);
+                player = new AudioPlayer(this);
 
-                    mediaPlayerBus->mime_open(uri);
-                }
+                connect(player,SIGNAL(progress(int)),this,SLOT(updateTime(int)));
+                connect(player,SIGNAL(finished()),this,SLOT(finishedAudioPlay()));
+
+                ui->viewImageButton->setText("Stop");
+
+                player->play(message.local_file_uri);
+
+                if (message.live)
+                    emit voiceNotePlayed(message);
                 break;
 
             case FMessage::Image:
-                {
-                    // The following is to avoid an Image Viewer bug where files without
-                    // EXIF data can't be opened.
+            case FMessage::Sticker:
+            {
+                ImageViewer *viewer = new ImageViewer(message.local_file_uri, window());
+                viewer->show();
+                break;
+            }
 
-                    QImageReader image(message.local_file_uri);
-
-                    if (image.format() == "jpeg")
-                    {
-                        ExifData *ed = exif_data_new_from_file(message.local_file_uri.toUtf8().constData());
-
-                        if (!ed)
-                        {
-                            ed = exif_data_new();
-                            if (ed)
-                            {
-                                Utilities::logData("Creating default Exif data.");
-                                ExifEntry *entry = exif_entry_new();
-
-                                exif_content_add_entry(ed->ifd[EXIF_IFD_0], entry);
-
-                                exif_entry_initialize(entry, EXIF_TAG_IMAGE_DESCRIPTION);
-                                entry->data = (unsigned char *) YAPPARI_APPLICATION_NAME;
-
-                                JPEGData *jpeg = jpeg_data_new_from_file(message.local_file_uri.toUtf8().constData());
-
-                                jpeg_data_set_exif_data(jpeg, ed);
-
-                                jpeg_data_save_file(jpeg, message.local_file_uri.toUtf8().constData());
-                                jpeg_data_unref(jpeg);
-                            }
-                        }
-
-                        if (ed)
-                            exif_data_unref(ed);
-                    }
-
-                    DBusNokiaImageViewerIf *imageViewerBus =
-                    new DBusNokiaImageViewerIf(NOKIA_IMAGEVIEWER_DBUS_NAME,
-                                               NOKIA_IMAGEVIEWER_DBUS_PATH,
-                                               dbus,this);
-
-                    imageViewerBus->mime_open(uri);
-                }
+            default:
+                QDesktopServices::openUrl(QUrl::fromLocalFile(message.local_file_uri));
                 break;
         }
     }
@@ -412,15 +386,20 @@ void ChatImageItem::downloadOrViewImage()
     {
         // Download media
 
-        Utilities::logData("ChatImageItem(): Requesting download");
+        downloading = true;
         ui->viewImageButton->setEnabled(false);
-        emit mediaDownload(message);
+        ui->viewImageButton->setText("Loading");
+
+        // Failed automatic downloads are not reported to the user
+        FMessage request = message;
+        request.thumb_image = autoDownload ? "auto" : QString();
+        autoDownload = false;
+        emit mediaDownload(request);
     }
 }
 
 void ChatImageItem::updateTimestamp()
 {
-    Utilities::logData("ChatImageItem: updateTimestamp()");
     setTimestamp(message);
 }
 
@@ -431,51 +410,44 @@ void ChatImageItem::updateProgress(float p)
 
     ui->progressBar->show();
     ui->progressBar->setValue((int)p);
-
-    if (p == 100 && message.key.from_me)
-    {
-        waiting = true;
-        setTimestamp(message);
-    }
 }
 
 void ChatImageItem::updateTime(int current)
 {
-    QString duration;
     int minutes = current / 60;
     int seconds = current % 60;
     ui->timeLabel->show();
-    ui->timeLabel->setText(duration.sprintf("%02d:%02d",minutes,seconds));
+    ui->timeLabel->setText(QString::asprintf("%02d:%02d",minutes,seconds));
 }
 
 void ChatImageItem::finishedAudioPlay()
 {
     ui->timeLabel->hide();
+    ui->viewImageButton->setText("Play");
     ui->viewImageButton->setEnabled(true);
 }
 
 void ChatImageItem::updateUri(QString uri)
 {
+    downloading = false;
     ui->progressBar->hide();
     message.local_file_uri = uri;
     setButton();
+
+    if (message.data.isEmpty())
+        setImage();
 }
 
 void ChatImageItem::resetButton()
 {
-    if (message.key.from_me)
-    {
-        // This is a request for a retry button
-        ui->viewImageButton->setText("Retry");
-        retryButton = true;
-    }
-
+    downloading = false;
     ui->progressBar->hide();
+    ui->viewImageButton->setText("Download");
     ui->viewImageButton->setEnabled(true);
 }
 
 void ChatImageItem::updateImage(FMessage message)
 {
-    this->message = message;
+    this->message.data = message.data;
     setImage();
 }

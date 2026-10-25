@@ -42,7 +42,8 @@ class ContactRoster : public QObject
 public:
     ContactRoster(QObject *parent= 0);
 
-    Contact& getContact(QString jid);
+    // store = false: a new contact is only written by a later update
+    Contact& getContact(QString jid, bool store = true);
     bool isContactInRoster(QString jid);
     Group& getGroup(QString gjid);
     Group& getGroup(QString from, QString author, QString newSubject,
@@ -57,7 +58,7 @@ public:
     void updateContact(Contact *contact);
     void updatePhoto(Contact *contact);
     void updateStatus(Contact *contact);
-    void getPhotoFromAddressBook(Contact *contact);
+    void updateContacts(QList<Contact *> list);
     void addGroupParticipant(Group *group, QString jid);
     void removeGroupParticipant(Group *group, QString jid);
     void updateSubject(Group *group);
@@ -73,7 +74,7 @@ private:
     RosterDBManager rosterDb;
 
     void copy(Contact *from, Contact *to);
-    Contact *createContact(QString jid);
+    Contact *createContact(QString jid, bool store);
     Group *createGroup(QString from, QString author, QString newSubject, QString creation,
                        QString subjectOwner, QString subjectTimestamp);
 

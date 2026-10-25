@@ -31,12 +31,7 @@
 #include <QMessageBox>
 #include <QDateTime>
 
-#include "Dbus/gtkbindings-new.h"
-#include <libosso.h>
-#include <libebook/e-book.h>
-#include <libosso-abook/osso-abook.h>
-
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
 #include "contactlistiterator.h"
 
@@ -74,12 +69,12 @@ ContactRoster::ContactRoster(QObject *parent) : QObject(parent)
     delete list;
 }
 
-Contact& ContactRoster::getContact(QString jid)
+Contact& ContactRoster::getContact(QString jid, bool store)
 {
     Contact *c = roster.value(jid,0);
 
     if (c == 0)
-        c = createContact(jid);
+        c = createContact(jid, store);
 
     return *c;
 }
@@ -94,7 +89,7 @@ bool ContactRoster::isContactInRoster(QString jid)
     return roster.contains(jid);
 }
 
-Contact* ContactRoster::createContact(QString jid)
+Contact* ContactRoster::createContact(QString jid, bool store)
 {
     Contact *c = new Contact();
     c->fromAddressBook = false;
@@ -103,7 +98,8 @@ Contact* ContactRoster::createContact(QString jid)
     c->type = Contact::TypeContact;
     c->photoId = c->name = c->alias = QString();
     roster.insert(jid,c);
-    updateContact(c);
+    if (store)
+        updateContact(c);
     return c;
 }
 
@@ -257,72 +253,9 @@ void ContactRoster::updatePhoto(Contact *c)
     emit updatePhotoContact(c);
 }
 
-void ContactRoster::getPhotoFromAddressBook(Contact *c)
+void ContactRoster::updateContacts(QList<Contact *> list)
 {
-    bool hadPreviousPhoto = !c->photoId.isEmpty();
-
-    GError *error = NULL;
-
-    OssoABookRoster *o_roster = osso_abook_aggregator_get_default (&error);
-    if (error)
-    {
-        QString errorStr = error->message;
-        Utilities::logData("getPhotoFromAddressBook(): " + errorStr);
-        g_error_free(error);
-    }
-
-    OssoABookAggregator *aggregator = OSSO_ABOOK_AGGREGATOR(o_roster);
-    osso_abook_waitable_run(OSSO_ABOOK_WAITABLE(aggregator),
-                            g_main_context_default(), &error);
-    if (error)
-    {
-        QString errorStr = error->message;
-        Utilities::logData("getPhotoFromAddressBook(): " + errorStr);
-        g_error_free(error);
-    }
-
-    GList *list =
-            osso_abook_aggregator_find_contacts_for_phone_number(aggregator,
-                                                                 c->phone.toUtf8().constData(),
-                                                                 FALSE);
-    if (list)
-    {
-        OssoABookContact *contact = OSSO_ABOOK_CONTACT(list->data);
-        GdkPixbuf *pixbuf = osso_abook_contact_get_photo(contact);
-
-        if (pixbuf)
-        {
-            gchar *buffer;
-            gsize buffer_size;
-            gdk_pixbuf_save_to_bufferv(pixbuf,&buffer,&buffer_size,"png",NULL,NULL,&error);
-
-            c->photo.loadFromData((const uchar*)buffer, buffer_size);
-            c->photoId = "abook";
-
-            // Force update in DB
-            hadPreviousPhoto = true;
-
-            g_free(buffer);
-
-            gdk_pixbuf_unref(pixbuf);
-
-        }
-        else if (hadPreviousPhoto)
-        {
-            c->photo = QImage();
-            c->photoId.clear();
-        }
-
-        g_list_free(list);
-    }
-    else if (hadPreviousPhoto)
-    {
-        c->photo = QImage();
-        c->photoId.clear();
-    }
-
-    if (hadPreviousPhoto)
-        emit updatePhotoContact(c);
+    rosterDb.updateContacts(list);
 }
 
 void ContactRoster::updateStatus(Contact *contact)

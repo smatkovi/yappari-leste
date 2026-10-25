@@ -27,17 +27,17 @@
  */
 
 #include <QSortFilterProxyModel>
+#include <QContextMenuEvent>
 #include <QMessageBox>
-#include <QMouseEvent>
+#include <QScroller>
 #include <QMenu>
 
 #include "selectcontactdialog.h"
 #include "ui_selectcontactdialog.h"
 
-#include "Contacts/contactitem.h"
 #include "Contacts/contactlistiterator.h"
 
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
 #include "contactdisplayitem.h"
 #include "contactdisplaydelegate.h"
@@ -63,10 +63,14 @@ SelectContactDialog::SelectContactDialog(ContactList list, QWidget *parent,
     proxy->setSourceModel(model);
     ui->listView->setModel(proxy);
 
-    if (contextMenuEnabled)
-        ui->listView->installEventFilter(this);
+    ui->listView->installEventFilter(this);
+    this->contextMenuEnabled = contextMenuEnabled;
+    QScroller::grabGesture(ui->listView->viewport(), QScroller::LeftMouseButtonGesture);
 
     proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    proxy->setFilterRole(Qt::UserRole + 3);
+    proxy->setSortRole(Qt::UserRole + 3);
+    proxy->setSortCaseSensitivity(Qt::CaseInsensitive);
 
     ContactDisplayDelegate *delegate = new ContactDisplayDelegate(ui->listView);
 
@@ -80,7 +84,7 @@ SelectContactDialog::SelectContactDialog(ContactList list, QWidget *parent,
             model->appendRow(new ContactDisplayItem(contact));
     }
 
-    model->sort(0);
+    proxy->sort(0);
 
     connect(this,SIGNAL(sendRightButtonClicked(QPoint)),
             this,SLOT(contextMenu(QPoint)));
@@ -106,8 +110,6 @@ Contact& SelectContactDialog::getSelectedContact()
     QModelIndex index = ui->listView->currentIndex();
     QSortFilterProxyModel *proxy = (QSortFilterProxyModel *) ui->listView->model();
 
-    Utilities::logData("INDEX DATA " + index.data(Qt::UserRole + 1).toString());
-
     ContactDisplayItem *item =
             (ContactDisplayItem *) model->itemFromIndex(proxy->mapToSource(index));
 
@@ -123,8 +125,11 @@ void SelectContactDialog::accept()
 bool SelectContactDialog::eventFilter(QObject *obj, QEvent *event)
 {
     if (event->type() == QEvent::ContextMenu) {
-        QMouseEvent *mouseEvent = static_cast<QMouseEvent*> (event);
-        sendRightButtonClicked(mouseEvent->globalPos());
+        if (contextMenuEnabled)
+        {
+            QContextMenuEvent *menuEvent = static_cast<QContextMenuEvent*> (event);
+            emit sendRightButtonClicked(menuEvent->globalPos());
+        }
         return true;
     }
     else if (obj != ui->lineEdit && event->type() == QEvent::KeyPress)
@@ -141,20 +146,15 @@ bool SelectContactDialog::eventFilter(QObject *obj, QEvent *event)
 
 void SelectContactDialog::contextMenu(QPoint p)
 {
-    Utilities::logData("Context Menu requested");
-
     QModelIndex index = ui->listView->indexAt(ui->listView->viewport()->mapFromGlobal(p));
 
     if (index.isValid())
     {
         QString jid = index.data(Qt::UserRole + 1).toString();
-        Utilities::logData("Index jid: " + jid);
 
         QMenu *menu = new QMenu(this);
         QAction *viewContact = new QAction("View Contact",this);
-        QAction *removeContact = new QAction("Remove Contact",this);
         menu->addAction(viewContact);
-        menu->addAction(removeContact);
 
         QAction *action = menu->exec(p);
         if (action == viewContact)
@@ -163,41 +163,7 @@ void SelectContactDialog::contextMenu(QPoint p)
             emit showContactInfo(c);
             close();
         }
-        else if (action == removeContact)
-        {
-            QMessageBox msg(this);
-
-            Contact *c = contactList.value(jid);
-
-            if (c->hasOpenChat)
-            {
-                msg.setText("You have an open chat with this contact. Close it first.");
-                msg.exec();
-            }
-            else if (Client::isSynchronizing)
-            {
-                msg.setText("Contacts are being synchronized right now. Please try again later");
-                msg.exec();
-            }
-            else
-            {
-                QString text = (c->fromAddressBook &&
-                                (Client::sync == SYNC_ENABLED | Client::sync == SYNC_INTL_ONLY))
-                        ? "This contact is from your Address Book and it will reappear "
-                          "in this list in the next synchronization."
-                        : "This will remove this contact permanently.";
-
-                msg.setText(text + "\n\nAre you sure you want to remove this contact?");
-                msg.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
-
-                if (msg.exec() == QMessageBox::Yes)
-                {
-                    model->removeRow(index.row());
-                    emit deleteContact(jid);
-                }
-            }
-        }
-        Utilities::logData("Exit Menu");
+        menu->deleteLater();
         ui->listView->clearSelection();
     }
 }

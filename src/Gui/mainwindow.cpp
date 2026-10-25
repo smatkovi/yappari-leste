@@ -29,43 +29,33 @@
 #include <QApplication>
 #include <QMaemo5InformationBox>
 #include <QMessageBox>
-#include <QDesktopServices>
+#include <QPushButton>
 #include <QCloseEvent>
-#include <QUrl>
+#include <QContextMenuEvent>
+#include <QScroller>
+#include <QMenu>
 
-#include "Dbus/dbusappletif.h"
-#include "Dbus/dbusnokiamcerequestif.h"
-#include "Dbus/notifyobject.h"
-
-#include "Contacts/contactitem.h"
+#include "Contacts/group.h"
 
 #include "aboutdialog.h"
-#include "accountinfowindow.h"
-#include "blockedcontactswindow.h"
-#include "statuswindow.h"
 #include "chatdisplaydelegate.h"
 #include "globalsettingsdialog.h"
-#include "creategroupwindow.h"
-#include "groupinfowindow.h"
-#include "groupwindow.h"
+#include "linkwindow.h"
 #include "chatwindow.h"
 #include "selectcontactdialog.h"
-#include "profilewindow.h"
-#include "networkusagewindow.h"
-#include "whatsnewwindow.h"
 
 #include "globalconstants.h"
 
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
 #include "Sql/chatlogger.h"
 
 #include "client.h"
 
-MainWindow::MainWindow(ContactRoster *roster, bool showWhatsNew, QWidget *parent) :
+MainWindow::MainWindow(ContactRoster *roster, QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::MainWindow)
 {
@@ -77,28 +67,19 @@ MainWindow::MainWindow(ContactRoster *roster, bool showWhatsNew, QWidget *parent
     model->setSortRole(Qt::UserRole + 2);
     ui->listView->setModel(model);
     ui->listView->installEventFilter(this);
+    ui->listView->setContextMenuPolicy(Qt::DefaultContextMenu);
+    QScroller::grabGesture(ui->listView->viewport(), QScroller::LeftMouseButtonGesture);
 
     ChatDisplayDelegate *delegate = new ChatDisplayDelegate(ui->listView);
 
     ui->listView->setItemDelegate(delegate);
 
-    connect(ui->createChatButton,SIGNAL(pressed()),this,SLOT(createChatWindow()));
+    connect(ui->createChatButton,SIGNAL(clicked()),this,SLOT(createChatWindow()));
     connect(ui->actionSettings,SIGNAL(triggered()),this,SLOT(showGlobalSettingsDialog()));
-    connect(ui->actionStatus,SIGNAL(triggered()),this,SLOT(showStatusWindow()));
+    connect(ui->actionAccount,SIGNAL(triggered()),this,SLOT(showAccount()));
     connect(ui->actionQuit,SIGNAL(triggered()),this,SLOT(quit()));
     connect(ui->actionAbout,SIGNAL(triggered()),this,SLOT(showAboutDialog()));
-    connect(ui->actionDonate,SIGNAL(triggered()),this,SLOT(showDonate()));
     connect(ui->actionSync,SIGNAL(triggered()),this,SLOT(requestSync()));
-    connect(ui->actionProfile,SIGNAL(triggered()),
-            this,SLOT(showProfileWindow()));
-    connect(ui->actionAccountInfo,SIGNAL(triggered()),
-            this,SLOT(showAccountInfoWindow()));
-    connect(ui->actionNetworkUsage,SIGNAL(triggered()),
-            this,SLOT(showNetworkUsageWindow()));
-    connect(ui->actionCreateGroup,SIGNAL(triggered()),
-            this,SLOT(showCreateGroupWindow()));
-    connect(ui->actionBlockedContacts,SIGNAL(triggered()),
-            this,SLOT(showBlockedContactsWindow()));
 
     connect(ui->listView,SIGNAL(clicked(QModelIndex)),
             this,SLOT(contactSelected(QModelIndex)));
@@ -108,11 +89,10 @@ MainWindow::MainWindow(ContactRoster *roster, bool showWhatsNew, QWidget *parent
 
     this->roster = roster;
 
-    setAttribute(Qt::WA_Maemo5StackedWindow);
+    // Stacked window root (Hildon window stack of the Leste Qt platform plugin)
+    setProperty("X-Maemo-StackedWindow", 1);
     setAttribute(Qt::WA_DeleteOnClose,false);
     setAttribute(Qt::WA_QuitOnClose,false);
-
-    isScreenLocked = false;
 
     notifyObject = new NotifyObject(this);
     connect(this,SIGNAL(sendNotification(QString,FMessage)),
@@ -123,19 +103,6 @@ MainWindow::MainWindow(ContactRoster *roster, bool showWhatsNew, QWidget *parent
     resetNewDayTimer();
 
     loadOpenChats();
-
-    // WhatsNew Window
-
-    if (showWhatsNew)
-    {
-        WhatsNewWindow *window = new WhatsNewWindow(this);
-
-        window->setAttribute(Qt::WA_Maemo5StackedWindow);
-        window->setAttribute(Qt::WA_DeleteOnClose);
-        window->setWindowFlags(window->windowFlags() | Qt::Window);
-        window->show();
-    }
-
 }
 
 MainWindow::~MainWindow()
@@ -143,6 +110,15 @@ MainWindow::~MainWindow()
     delete ui;
 
     Utilities::logData("MainWindow destroyed");
+}
+
+// The roster entry of a chat: a Group for group chats
+Contact& MainWindow::chatContact(QString jid)
+{
+    if (jid.endsWith("@" GROUP_DOMAIN))
+        return roster->getGroup(jid);
+
+    return roster->getContact(jid);
 }
 
 void MainWindow::loadOpenChats()
@@ -155,51 +131,71 @@ void MainWindow::loadOpenChats()
     {
         ConversationsDBEntry entry = i.next();
 
-        Utilities::logData("Entry retrieved: " + entry.jid);
+        Contact& contact = chatContact(entry.jid);
+        contact.hasOpenChat = true;
+        ChatDisplayItem *item = new ChatDisplayItem(&contact);
+        lastContactsList.insert(entry.jid,item);
+        item->muted = entry.muted;
+        item->muteExpireTimestamp = entry.muteExpireTimestamp;
+        model->appendRow(item);
 
-        // Verify if the contact is still in roster
-        // It should be unless the database has been corrupted somehow
-        if (roster->isContactInRoster(entry.jid))
-        {
-            // Create the open chats item
-            Contact& contact = roster->getContact(entry.jid);
-            contact.hasOpenChat = true;
-            ChatDisplayItem *item = new ChatDisplayItem(&contact);
-            lastContactsList.insert(entry.jid,item);
-            item->muted = entry.muted;
-            item->muteExpireTimestamp = entry.muteExpireTimestamp;
-            model->appendRow(item);
-
-            // Set the last line logged in the item
-            FMessage msg = ChatLogger::lastMessage(entry.jid);
-            item->updateData(msg);
-        }
-        else
-        {
-            // Database is corrupted.  Delete that chat
-
-            Utilities::logData("ERROR: Jid " + entry.jid + " not found in roster");
-            chatsDB.removeChat(entry.jid);
-        }
+        // Set the last line logged in the item
+        FMessage msg = ChatLogger::lastMessage(entry.jid);
+        item->updateData(msg);
     }
     model->sort(0,Qt::DescendingOrder);
 }
 
+// Adds a conversation to the list of chats in the main window
+ChatDisplayItem *MainWindow::addChatToList(Contact& contact)
+{
+    QString jid = contact.jid;
+
+    if (lastContactsList.contains(jid))
+        return lastContactsList.value(jid);
+
+    ChatDisplayItem *item = new ChatDisplayItem(&contact);
+    lastContactsList.insert(jid,item);
+    model->appendRow(item);
+
+    contact.hasOpenChat = true;
+
+    FMessage msg = ChatLogger::lastMessage(jid);
+    item->updateData(msg);
+
+    ConversationsDBEntry entry;
+    entry.jid = jid;
+    entry.muted = false;
+    entry.muteExpireTimestamp = 0;
+    chatsDB.createChat(entry);
+
+    emit photoRequest(jid, contact.photoId, false);
+
+    return item;
+}
+
 void MainWindow::createChatWindow()
 {
-    if (!roster->size())
+    ContactList list;
+
+    // People with a name (address book of the main phone or push name) and groups
+    foreach (Contact *c, roster->getContactList())
     {
-        QMaemo5InformationBox::information(this,"Contacts haven't been synchronized yet.",
-                                           QMaemo5InformationBox::NoTimeout);
+        if (c->jid == Client::myJid)
+            continue;
+        if (c->type == Contact::TypeGroup ? !c->name.isEmpty()
+                                          : (c->fromAddressBook || !c->alias.isEmpty()))
+            list.insert(c->jid, c);
+    }
+
+    if (list.isEmpty())
+    {
+        QMaemo5InformationBox::information(this,"WhatsApp hasn't sent your contacts yet.",
+                                           QMaemo5InformationBox::DefaultTimeout);
     }
     else
     {
-        SelectContactDialog selectContactDialog(roster->getContactList(),this);
-
-        connect(&selectContactDialog,SIGNAL(showContactInfo(Contact*)),
-                this,SLOT(viewContact(Contact*)));
-        connect(&selectContactDialog,SIGNAL(deleteContact(QString)),
-                roster,SLOT(deleteContact(QString)));
+        SelectContactDialog selectContactDialog(list,this,false,true);
 
         if (selectContactDialog.exec() == QDialog::Accepted)
         {
@@ -212,26 +208,13 @@ void MainWindow::createChatWindow()
 
 ChatWindow *MainWindow::createChatWindow(Contact& contact, bool show)
 {
-    // Just open one window at a time to avoid duplicates
-    createWindowMutex.lock();
-
     ChatWindow *chat;
 
     QString jid = contact.jid;
 
-    if (contact.type == Contact::TypeGroup)
-        Utilities::logData("Group");
-    else
-        Utilities::logData("Contact");
-
     if (!chatWindowList.contains(jid))
     {
-        Utilities::logData("There's no previous chat window");
-
-        if (contact.type == Contact::TypeContact)
-            chat = new ChatWindow(&contact,this);
-        else
-            chat = new GroupWindow((Group *)&contact,this);
+        chat = new ChatWindow(&contact,this);
 
         chatWindowList.insert(jid,chat);
 
@@ -239,25 +222,7 @@ ChatWindow *MainWindow::createChatWindow(Contact& contact, bool show)
         {
             // This is a new chat and it is not in the
             // open chats list
-
-            // Create the open chats item
-            ChatDisplayItem *item = new ChatDisplayItem(&contact);
-            lastContactsList.insert(jid,item);
-            model->appendRow(item);
-
-            // This contact now has an open chat
-            contact.hasOpenChat = true;
-
-            // Set the last line logged in the item
-            FMessage msg = chat->lastMessage();
-            item->updateData(msg);
-
-            // Store this chat in the DB
-            ConversationsDBEntry entry;
-            entry.jid = jid;
-            entry.muted = false;
-            entry.muteExpireTimestamp = 0;
-            chatsDB.createChat(entry);
+            addChatToList(contact);
 
             if (contact.type == Contact::TypeContact)
                 emit subscribe(jid);
@@ -274,18 +239,6 @@ ChatWindow *MainWindow::createChatWindow(Contact& contact, bool show)
 
         chat->setAttribute(Qt::WA_DeleteOnClose);
 
-        if (!show)
-                Utilities::logData("Chat window will not be shown");
-        if (show)
-        {
-            Utilities::logData("Showing chat window");
-            qint64 startTime = QDateTime::currentMSecsSinceEpoch();
-            chat->show();
-            qint64 endTime = QDateTime::currentMSecsSinceEpoch() - startTime;
-            Utilities::logData("Chat window showed " + QString::number(endTime) +
-                               " milliseconds.");
-        }
-
         connect(chat,SIGNAL(sendMessage(FMessage)),
                 this,SLOT(sendMessageFromChat(FMessage)));
 
@@ -294,18 +247,6 @@ ChatWindow *MainWindow::createChatWindow(Contact& contact, bool show)
 
         connect(chat,SIGNAL(mute(QString,bool,qint64)),
                 this,SLOT(mute(QString,bool,qint64)));
-
-        connect(chat,SIGNAL(blockOrUnblockContact(QString,bool)),
-                this,SLOT(blockOrUnblockContact(QString,bool)));
-
-        connect(chat,SIGNAL(photoUpdate(QString,QString,bool)),
-                this,SLOT(requestPhotoUpdate(QString,QString,bool)));
-
-        connect(chat,SIGNAL(requestStatus(QString)),
-                this,SLOT(requestContactStatus(QString)));
-
-        connect(chat,SIGNAL(voiceNotePlayed(FMessage)),
-                this,SLOT(sendVoiceNotePlayed(FMessage)));
 
         connect(chat,SIGNAL(messageRead(FMessage)),
                 this,SLOT(sendMessageRead(FMessage)));
@@ -316,52 +257,45 @@ ChatWindow *MainWindow::createChatWindow(Contact& contact, bool show)
         connect(chat,SIGNAL(forwardMessage(FMessage)),
                 this,SLOT(forwardMessage(FMessage)));
 
-        if (contact.type == Contact::TypeGroup)
-        {
-            GroupWindow *groupChat = (GroupWindow *) chat;
-            connect(groupChat,SIGNAL(changeSubject(QString,QString)),
-                    this,SLOT(sendSetGroupSubjectFromChat(QString,QString)));
+        connect(chat,SIGNAL(mediaDownload(FMessage)),
+                this,SLOT(requestMediaDownload(FMessage)));
 
-            connect(groupChat,SIGNAL(requestLeaveGroup(QString)),
-                    this,SLOT(requestLeaveGroupFromChat(QString)));
-
-            connect(groupChat,SIGNAL(getParticipants(QString)),
-                    this,SLOT(requestGetParticipants(QString)));
-        }
-        else
+        if (contact.type == Contact::TypeContact)
             emit queryLastOnline(jid);
+
+        if (show)
+            chat->show();
     }
     else
     {
-        Utilities::logData("There's an open chat window for " + jid);
-
         chat = chatWindowList.value(jid);
-        setActiveChat(jid);
+        if (show)
+            setActiveChat(jid);
     }
 
-    Utilities::logData("Setting chat window title");
     chat->setContact(&contact);
-    Utilities::logData("Window title set");
 
-    // Release the lock
-    createWindowMutex.unlock();
-
-    Utilities::logData("createChatWindow(): finished");
     return chat;
 }
 
 void MainWindow::deleteChat(QObject *obj)
 {
-    QString jid = ((ChatWindow *)obj)->getContact().jid;
-    chatWindowList.remove(jid);
+    // Called from QObject's destructor: only compare pointers
+    foreach (QString jid, chatWindowList.keys())
+        if (chatWindowList.value(jid) == obj)
+            chatWindowList.remove(jid);
 }
 
 void MainWindow::setActiveChat(QString jid)
 {
+    if (!chatWindowList.contains(jid) && lastContactsList.contains(jid))
+        createChatWindow(chatContact(jid), false);
+
     if (chatWindowList.contains(jid))
     {
         ChatWindow *chat = chatWindowList.value(jid);
         chat->show();
+        chat->raise();
         chat->activateWindow();
         emit activeChatChanged(jid);
     }
@@ -369,150 +303,91 @@ void MainWindow::setActiveChat(QString jid)
 
 void MainWindow::updateGroup(Group &group, bool notify)
 {
-    ChatDisplayItem *item;
-
-    if (!lastContactsList.contains(group.jid))
+    if (lastContactsList.contains(group.jid))
     {
-        // New group
-        item = new ChatDisplayItem(&group);
-        lastContactsList.insert(group.jid,item);
-        model->appendRow(item);
-
-        // Refresh the last logged line
-        ChatLogger logger;
-        logger.init(group.jid);
-        FMessage msg = logger.lastMessage();
-        item->updateData(msg);
-
-        // Store this chat in the DB
-        ConversationsDBEntry entry;
-        entry.jid = group.jid;
-        entry.muted = false;
-        entry.muteExpireTimestamp = 0;
-        chatsDB.createChat(entry);
-
-        QMaemo5InformationBox::information(this,
-                                           (group.author == Client::myJid) ?
-                                               "Group " + group.name + " created successfully" :
-                                               "You've been added to group " + group.name);
-    }
-    else
-    {
-        // New subject.
-        item = lastContactsList.value(group.jid);
+        ChatDisplayItem *item = lastContactsList.value(group.jid);
         item->updateData();
     }
 
-    /*
-
-    // This section updates the contact name of the subject owner
-
-    Contact& contact = roster->getContact(group.subjectOwner);
-
-    if (contact.name.isEmpty())
-    {
-        if (!group.subjectOwnerName.isEmpty())
-            contact.name = group.subjectOwnerName;
-        else
-            contact.name = contact.phone;
-    }
-
-    group.subjectOwnerName = contact.name;
-    */
-
-
     if (chatWindowList.contains(group.jid))
     {
-        // Chat is open, update subject
-        GroupWindow *groupWindow = (GroupWindow *) chatWindowList.value(group.jid);
-        groupWindow->setGroup(&group,notify);
+        ChatWindow *chat = chatWindowList.value(group.jid);
+        chat->setContact(&group);
     }
 
-    emit groupSubjectUpdated(group.jid);
+    if (notify)
+        QMaemo5InformationBox::information(this, "Group " + group.name);
 }
 
 void MainWindow::messageReceived(FMessage message)
 {
     ChatWindow *chat;
 
+    QString jid = message.key.remote_jid;
+    bool isGroup = jid.endsWith("@" GROUP_DOMAIN);
+    QString authorJid = isGroup ? message.remote_resource : jid;
+
     // Contact who sent the message
-    Contact& contact = roster->getContact(
-                (!message.remote_resource.isEmpty()
-                            ? message.remote_resource
-                            : message.key.remote_jid
-                ));
-
-    // Update contact alias
-    QString prevAlias = contact.alias;
-    contact.alias = (!message.notify_name.isEmpty())
-                        ? message.notify_name
-                        : ((!contact.name.isEmpty())
-                           ? contact.name
-                           : contact.phone);
-
-    // Update contact name if is empty with the alias
-    if (contact.name.isEmpty() ||
-            (!contact.fromAddressBook && contact.name != contact.alias))
+    if (!message.key.from_me && !authorJid.isEmpty())
     {
-        contact.name = contact.alias;
-        roster->updateName(&contact);
+        Contact& contact = roster->getContact(authorJid);
+
+        // Update contact alias (the push name)
+        if (!message.notify_name.isEmpty() && contact.alias != message.notify_name)
+        {
+            contact.alias = message.notify_name;
+            roster->updateAlias(&contact);
+        }
+
+        // Update contact name if is empty with the alias
+        if (contact.name.isEmpty() ||
+                (!contact.fromAddressBook && !contact.alias.isEmpty() && contact.name != contact.alias))
+        {
+            contact.name = contact.alias.isEmpty() ? contact.phone : contact.alias;
+            roster->updateName(&contact);
+        }
+
+        // If this is from a contact we don't have in the address book
+        // or if the show nicknames settings is enabled then
+        // let's use the alias
+        message.notify_name = ((Client::showNicknames || !contact.fromAddressBook) &&
+                               !contact.alias.isEmpty())
+                                ? contact.alias
+                                : contact.name;
     }
 
-    // This is to avoid constant DB access that
-    // might be pretty slow in a phone
-    if (contact.alias != prevAlias)
-        roster->updateAlias(&contact);
-
-    // If this is from a contact we don't have in the roster
-    // or if the show nicknames settings is enabled then
-    // let's use the alias
-    message.notify_name = (Client::showNicknames || !contact.fromAddressBook)
-                            ? contact.alias
-                            : contact.name;
-
-    // Try to retrieve a new photo for this contact only
-    // if there's no entry in the last contact list
-    if (!lastContactsList.contains(contact.jid))
-        emit photoRequest(contact.jid, contact.photoId, false);
+    Contact& chatPeer = chatContact(jid);
 
     // Check if a window for this chat is already open
-    if (!chatWindowList.contains(message.key.remote_jid))
+    if (!chatWindowList.contains(jid))
     {
         // Create a new window for this chat
-        if (!message.remote_resource.isEmpty())
-        {
-            Group& group = roster->getGroup(message.key.remote_jid);
-            chat = createChatWindow(group, Client::popupOnFirstMessage);
-        }
-        else
-        {
-            chat = createChatWindow(contact, Client::popupOnFirstMessage);
-        }
+        chat = createChatWindow(chatPeer, Client::popupOnFirstMessage && !message.key.from_me);
 
-        notify(contact,message);
+        if (!message.key.from_me)
+            notify(chatPeer,message);
     }
     else
     {
-        chat = chatWindowList.value(message.key.remote_jid);
-        if (isScreenLocked || !chat->isActiveWindow())
-            notify(contact,message);
+        chat = chatWindowList.value(jid);
+        if (!message.key.from_me && !chat->isActiveWindow())
+            notify(chatPeer,message);
     }
 
     chat->messageReceived(message);
-    ChatDisplayItem *item = lastContactsList.value(message.key.remote_jid);
+    ChatDisplayItem *item = addChatToList(chatPeer);
     item->updateData(message);
     model->sort(0,Qt::DescendingOrder);
 }
 
-void MainWindow::mediaUploadAccepted(FMessage message)
+// Older messages of a chat were stored (history sync after linking)
+void MainWindow::historyLogged(QString jid)
 {
-    // Check if a window for this chat is already open
-    if (chatWindowList.contains(message.remote_resource))
-    {
-        ChatWindow *chat = chatWindowList.value(message.remote_resource);
-        chat->mediaUploadAccepted(message);
-    }
+    ChatDisplayItem *item = addChatToList(chatContact(jid));
 
+    FMessage msg = ChatLogger::lastMessage(jid);
+    item->updateData(msg);
+    model->sort(0,Qt::DescendingOrder);
 }
 
 void MainWindow::sendMessageFromChat(FMessage message)
@@ -522,43 +397,37 @@ void MainWindow::sendMessageFromChat(FMessage message)
     if (message.type == FMessage::BodyMessage ||
         message.type == FMessage::MediaMessage)
     {
-        ChatDisplayItem *item = lastContactsList.value(message.key.remote_jid);
+        ChatDisplayItem *item = addChatToList(chatContact(message.key.remote_jid));
         item->updateData(message);
         model->sort(0,Qt::DescendingOrder);
     }
     emit sendMessage(message);
 }
 
-void MainWindow::sendSetGroupSubjectFromChat(QString gjid, QString newSubject)
-{
-    emit sendSetGroupSubject(gjid, newSubject);
-}
-
 void MainWindow::messageStatusUpdate(FMessage message)
 {
     if (!chatWindowList.contains(message.key.remote_jid))
     {
-        Utilities::logData("No chat for " + message.key.remote_jid + " found.");
-        Contact& contact = roster->getContact(message.key.remote_jid);
-
         ChatLogger logger;
-        logger.init(contact.jid);
+        logger.init(message.key.remote_jid);
         logger.updateLoggedMessage(message);
-        //chat = createChat(contact);
     }
     else
     {
-       Utilities::logData("Chat for " + message.key.remote_jid + " found.");
        ChatWindow *chat = chatWindowList.value(message.key.remote_jid);
        chat->messageStatusUpdate(message);
     }
 }
 
+// The chat was read on another device of ours
+void MainWindow::readElsewhere(QString jid)
+{
+    notifyObject->closeNotification(jid);
+}
+
 void MainWindow::quit()
 {
     Utilities::logData("User has quit the application");
-
-    // TODO: Clean disconnect here and close all sockets
 
     qApp->quit();
 }
@@ -567,48 +436,49 @@ void MainWindow::contactSelected(QModelIndex index)
 {
     QString jid = index.data(Qt::UserRole + 1).toString();
 
-    createChatWindow(roster->getContact(jid), true);
+    createChatWindow(chatContact(jid), true);
 
     ui->listView->clearSelection();
 }
 
 void MainWindow::notify(const Contact& contact, FMessage& message)
 {
-    if (lastContactsList.contains(message.key.remote_jid))
+    QString jid = message.key.remote_jid;
+
+    if (lastContactsList.contains(jid))
     {
-        ChatDisplayItem *item = lastContactsList.value(message.key.remote_jid);
+        ChatDisplayItem *item = lastContactsList.value(jid);
         if (item->muted && item->muteExpireTimestamp != 0 &&
                 item->muteExpireTimestamp < QDateTime::currentMSecsSinceEpoch())
         {
             item->muted = false;
-            if (chatWindowList.contains(message.key.remote_jid))
+            if (chatWindowList.contains(jid))
             {
-                ChatWindow *chat = chatWindowList.value(message.key.remote_jid);
+                ChatWindow *chat = chatWindowList.value(jid);
                 chat->unmute();
             }
         }
 
-        QString name;
-
-
-        if (!item->muted)
-        {
-            // Shows Group name in notifications
-            if (!message.remote_resource.isEmpty())
-            {
-                Group& group = roster->getGroup(message.key.remote_jid);
-                name = group.name;
-            }
-            else
-            {
-                name = (Client::showNicknames || !contact.fromAddressBook)
-                        ? (contact.alias.isEmpty() ? contact.phone : contact.alias)
-                        : contact.name;
-            }
-
-            emit sendNotification(name,message);
-        }
+        if (item->muted)
+            return;
     }
+
+    QString name;
+
+    if (contact.type == Contact::TypeGroup)
+    {
+        // "Author @ Group"
+        name = message.notify_name + " @ " +
+               (contact.name.isEmpty() ? QString("group") : contact.name);
+    }
+    else
+    {
+        name = ((Client::showNicknames || !contact.fromAddressBook) && !contact.alias.isEmpty())
+                ? contact.alias
+                : (contact.name.isEmpty() ? contact.phone : contact.name);
+    }
+
+    emit sendNotification(name,message);
 }
 
 void MainWindow::showAboutDialog()
@@ -618,30 +488,8 @@ void MainWindow::showAboutDialog()
     dialog.exec();
 }
 
-void MainWindow::lockModeChanged(QString lockMode)
-{
-    //isScreenLocked = (lockMode == "locked") ? true : false;
-    isScreenLocked = (lockMode == "on") ? false : true;
-
-    if (!isScreenLocked)
-    {
-        QList<ChatWindow*> values = chatWindowList.values();
-        for (int i = 0; i < values.size(); i++)
-            if (values.at(i)->isActiveWindow())
-            {
-                Utilities::logData("Closing outstanding notifications for " +
-                                   values.at(i)->getContact().jid);
-                notifyObject->closeNotification(values.at(i)->getContact().jid);
-                return;
-            }
-    }
-}
-
 void MainWindow::available(QString jid, bool online)
 {
-    // This is a way to do it.  Another way is to connect the signal
-    // available() in client.cpp to a method in ContactRoster.
-
     if (roster->isContactInRoster(jid))
     {
         Contact& c = roster->getContact(jid);
@@ -688,7 +536,7 @@ void MainWindow::composing(QString jid, QString participant, QString media)
             chat->composing("", media);
         } else {
             Contact& c = roster->getContact(participant);
-            chat->composing(c.name, media);
+            chat->composing(c.name.isEmpty() ? c.phone : c.name, media);
         }
     }
 }
@@ -703,45 +551,9 @@ void MainWindow::paused(QString jid, QString participant)
     }
 }
 
-void MainWindow::showDonate()
-{
-    QDesktopServices::openUrl(QUrl(DONATE_URL));
-}
-
-void MainWindow::requestLeaveGroupFromChat(QString gjid)
-{
-    emit requestLeaveGroup(gjid);
-}
-
-void MainWindow::groupLeft(QString gjid)
-{
-    // Delete group from open chat windows
-    if (chatWindowList.contains(gjid))
-    {
-        Utilities::logData("Removing open group window: " + gjid);
-        GroupWindow *group = (GroupWindow *) chatWindowList.value(gjid);
-        chatWindowList.remove(gjid);
-        group->close();
-    }
-
-    // Delete group from last chats list
-    if (lastContactsList.contains(gjid))
-    {
-        Utilities::logData("Removing group from conversations list: " + gjid);
-        ChatDisplayItem *item = lastContactsList.value(gjid);
-        lastContactsList.remove(gjid);
-        model->removeRow(item->row());
-        ui->listView->clearSelection();
-    }
-
-    // Delete group from open chats DB
-    chatsDB.removeChat(gjid);
-
-    roster->deleteGroup(gjid);
-}
-
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // Yappari keeps running in the background; Quit is in the menu
     hide();
     event->ignore();
 }
@@ -752,54 +564,110 @@ void MainWindow::showGlobalSettingsDialog()
 
     if (dialog.exec() == QDialog::Accepted)
     {
-        Client::port = dialog.getPort();
-        Client::sync = dialog.getSync();
-
         Client::showNicknames = dialog.getShowNicknames();
         Client::showNumbers = dialog.getShowNumbers();
         Client::popupOnFirstMessage = dialog.getPopupOnFirstMessage();
         Client::blueChecks = dialog.getBlueChecks();
         Client::automaticDownloadBytes = dialog.getAutomaticDownloadBytes();
-        Client::importMediaToGallery = dialog.getImportMediaToGallery();
-        Client::syncFreq = dialog.getSyncFrequency();
-        Client::startOnBoot = dialog.getStartOnBoot();
         Client::enterIsSend = dialog.getEnterIsSend();
-        Client::autoCloseEmoji = dialog.getAutoCloseEmoji();
-        Client::voiceCodec = dialog.getVoiceCodec();
 
         emit settingsUpdated();
     }
+}
+
+void MainWindow::showAccount()
+{
+    if (Client::connection->state() == "logged-out")
+    {
+        showLinkWindow();
+        return;
+    }
+
+    QString number = Client::myJid.left(Client::myJid.indexOf('@'));
+
+    QMessageBox msg(this);
+    msg.setWindowTitle("Account");
+    msg.setText("Yappari is linked to the WhatsApp account of +" + number +
+                " as a linked device.\n\nUnlinking removes this device from the "
+                "account; your chats stay on this phone.");
+    QPushButton *unlink = msg.addButton("Unlink", QMessageBox::DestructiveRole);
+    msg.addButton("Close", QMessageBox::RejectRole);
+    msg.exec();
+
+    if (msg.clickedButton() == unlink)
+    {
+        QMessageBox confirm(this);
+        confirm.setText("Unlink Yappari from WhatsApp?");
+        confirm.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
+
+        if (confirm.exec() == QMessageBox::Yes)
+            Client::connection->logout();
+    }
+}
+
+void MainWindow::showLinkWindow()
+{
+    if (!isVisible())
+        show();
+
+    if (linkWindow.isNull())
+    {
+        linkWindow = new LinkWindow(this);
+        showWindow(linkWindow);
+    }
+    else
+    {
+        linkWindow->show();
+        linkWindow->activateWindow();
+    }
+}
+
+void MainWindow::connectionReady()
+{
+    // Profile pictures of the chats in the list, presence of open chats
+    foreach (QString jid, lastContactsList.keys())
+    {
+        Contact &c = chatContact(jid);
+        emit photoRequest(jid, c.photoId, false);
+    }
+
+    foreach (QString jid, chatWindowList.keys())
+        if (!jid.endsWith("@" GROUP_DOMAIN))
+            emit subscribe(jid);
 }
 
 void MainWindow::requestSync()
 {
     if (Client::connectionStatus == Client::LoggedIn)
     {
-        if (Client::isSynchronizing)
-            QMaemo5InformationBox::information(this,"Contacts are already being synchronized.");
-        else
-        {
-            QMaemo5InformationBox::information(this,"Contacts will be synchronized in the background.");
-            emit sync();
-        }
+        QMaemo5InformationBox::information(this,"Contacts will be refreshed in the background.");
+        emit sync();
     }
     else
     {
-        QMaemo5InformationBox::information(this,"You need to be logged in to synchronize your contacts",
-                                           QMaemo5InformationBox::NoTimeout);
+        QMaemo5InformationBox::information(this,"You need to be connected to refresh your contacts",
+                                           QMaemo5InformationBox::DefaultTimeout);
+    }
+}
+
+// Names changed: redraw the chat list and window titles
+void MainWindow::contactsUpdated()
+{
+    foreach (QString jid, lastContactsList.keys())
+        lastContactsList.value(jid)->updateData();
+
+    foreach (QString jid, chatWindowList.keys())
+    {
+        ChatWindow *chat = chatWindowList.value(jid);
+        chat->setContact(&chatContact(jid));
     }
 }
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
     if (event->type() == QEvent::ContextMenu) {
-        // A little hack for a Qt bug workaround
-        QString text = statusBar()->currentMessage();
-
-        QMouseEvent *mouseEvent = static_cast<QMouseEvent*> (event);
-        sendRightButtonClicked(mouseEvent->globalPos());
-
-        statusBar()->showMessage(text);
+        QContextMenuEvent *menuEvent = static_cast<QContextMenuEvent*> (event);
+        emit sendRightButtonClicked(menuEvent->globalPos());
         return true;
     }
     else
@@ -808,77 +676,44 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::contextMenu(QPoint p)
 {
-    Utilities::logData("Context Menu requested");
-
     QModelIndex index = ui->listView->indexAt(ui->listView->viewport()->mapFromGlobal(p));
 
     if (index.isValid())
     {
         QString jid = index.data(Qt::UserRole + 1).toString();
-        Utilities::logData("Index jid: " + jid);
 
-        Contact& c = roster->getContact(jid);
+        Contact& c = chatContact(jid);
 
         QMenu *menu = new QMenu(this);
-        QString viewStr = (c.type == Contact::TypeContact)
-                ? "View Contact" : "Group Info";
-        QString deleteStr = (c.type == Contact::TypeContact)
-                ? "Delete Chat" : "Leave Group";
-
-        QAction *viewContactAction = new QAction(viewStr,this);
-        menu->addAction(viewContactAction);
-        QAction *deleteChat = new QAction(deleteStr,this);
+        QAction *deleteChat = new QAction("Delete Chat",this);
         menu->addAction(deleteChat);
 
         QAction *action = menu->exec(p);
-        if (action == viewContactAction)
-        {
-            if (c.type == Contact::TypeContact)
-            {
-                Contact& c = roster->getContact(jid);
-                viewContact(&c);
-            }
-            else if (c.type == Contact::TypeGroup)
-            {
-                Group& g = roster->getGroup(jid);
-                viewGroup(&g);
-            }
-        }
-        else if (action == deleteChat)
+        if (action == deleteChat)
         {
             QMessageBox msg(this);
 
-            deleteStr = (c.type == Contact::TypeContact)
-                    ? "delete this chat" : "leave this group";
-
-            msg.setText("Are you sure you want to " + deleteStr + "?");
+            msg.setText("Are you sure you want to delete this chat?\n"
+                        "The messages stay stored and come back with the next message.");
             msg.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
 
             if (msg.exec() == QMessageBox::Yes)
             {
-                if (c.type == Contact::TypeGroup)
-                    requestLeaveGroupFromChat(c.jid);
-                else
+                if (chatWindowList.contains(jid))
                 {
-                    if (chatWindowList.contains(jid))
-                    {
-                        ChatWindow *chat = chatWindowList.value(jid);
-                        chat->close();
-                        chatWindowList.remove(jid);
-                    }
-
-                    model->removeRow(index.row());
-                    lastContactsList.remove(jid);
-                    chatsDB.removeChat(jid);
-
-                    Contact& c = roster->getContact(jid);
-                    c.hasOpenChat = false;
-                    if (c.type == Contact::TypeContact)
-                        emit unsubscribe(jid);
+                    ChatWindow *chat = chatWindowList.value(jid);
+                    chatWindowList.remove(jid);
+                    chat->close();
                 }
+
+                model->removeRow(index.row());
+                lastContactsList.remove(jid);
+                chatsDB.removeChat(jid);
+
+                c.hasOpenChat = false;
             }
         }
-        Utilities::logData("Exit Menu");
+        menu->deleteLater();
         ui->listView->clearSelection();
     }
 }
@@ -906,7 +741,6 @@ bool MainWindow::hasChatOpen(Contact *c)
 
 void MainWindow::updateTimestamps()
 {
-    Utilities::logData("updateTimeStamps()");
     newDayTimer->stop();
 
     // Update Timestamps in the Open Chats list.
@@ -929,14 +763,11 @@ void MainWindow::updateTimestamps()
 void MainWindow::resetNewDayTimer()
 {
     QDateTime now = QDateTime::currentDateTime();
-    QDateTime tomorrow = QDateTime(now.date().addDays(1));
+    QDateTime tomorrow = QDateTime(now.date().addDays(1), QTime(0, 0));
     qint64 nextRunTime = tomorrow.toMSecsSinceEpoch() -
                          now.toMSecsSinceEpoch();
 
     newDayTimer->start(nextRunTime);
-
-    Utilities::logData("Resetting timestamps at " + QString::number(now.toMSecsSinceEpoch()));
-    Utilities::logData("Next run in " + QString::number(nextRunTime));
 }
 
 void MainWindow::updatePhoto(Contact& c)
@@ -946,78 +777,14 @@ void MainWindow::updatePhoto(Contact& c)
         ChatDisplayItem *item = lastContactsList.value(c.jid);
         item->updatePhoto(&c);
     }
-
-    emit previewPhotoReceived(c.jid);
 }
-
-void MainWindow::showAccountInfoWindow()
-{
-    QMaemo5InformationBox::information(this,
-                                       "! ! ! ! A T T E N T I O N ! ! ! !\n\n"\
-                                       "YAPPARI DOES NOT CHARGE YOU FOR THE USE OF THIS SOFTWARE\n"\
-                                       "YAPPARI AND WHATSAPP INC. ARE NOT RELATED AT ALL!!!\n\n"\
-                                       "But WhatsApp Inc. does and will charge you for the use of this service\n"
-                                       "If your account is expired you have to pay THEM to renew your account\nThere's nothing Yappari can do about it\n",
-                                       QMaemo5InformationBox::NoTimeout);
-
-    AccountInfoWindow *window = new AccountInfoWindow(this);
-    showWindow(window);
-}
-
-void MainWindow::showNetworkUsageWindow()
-{
-    NetworkUsageWindow *window = new NetworkUsageWindow(this);
-    showWindow(window);
-}
-
-void MainWindow::showProfileWindow()
-{
-    ProfileWindow *window = new ProfileWindow(this);
-
-    connect(window,SIGNAL(photoSelected(QString, QImage)),
-            this,SLOT(requestSetPhoto(QString, QImage)));
-
-    connect(window,SIGNAL(changeUserName(QString)),
-            this,SLOT(requestChangeUserName(QString)));
-
-    connect(window,SIGNAL(updateLastDir(int,QString)),
-            this,SLOT(requestUpdateLastDir(int,QString)));
-
-
-    showWindow(window);
-}
-
-void MainWindow::showStatusWindow()
-{
-    StatusWindow *window = new StatusWindow(this);
-
-    connect(window,SIGNAL(changeStatus(QString)),
-            this,SLOT(requestChangeStatus(QString)));
-    connect(this,SIGNAL(ownStatusUpdated(QString)),
-            window,SLOT(statusReceived(QString)));
-
-    emit getMyStatus();
-
-    showWindow(window);
-}
-
 
 void MainWindow::showWindow(QWidget *window)
 {
-    window->setAttribute(Qt::WA_Maemo5StackedWindow);
+    window->setProperty("X-Maemo-StackedWindow", 1);
     window->setAttribute(Qt::WA_DeleteOnClose);
     window->setWindowFlags(window->windowFlags() | Qt::Window);
     window->show();
-}
-
-void MainWindow::requestChangeUserName(QString newUserName)
-{
-    emit changeUserName(newUserName);
-}
-
-void MainWindow::requestChangeStatus(QString status)
-{
-    emit changeStatus(status);
 }
 
 void MainWindow::requestPhotoUpdate(QString jid, QString photoId, bool largeFormat)
@@ -1025,166 +792,55 @@ void MainWindow::requestPhotoUpdate(QString jid, QString photoId, bool largeForm
     emit photoRequest(jid, photoId, largeFormat);
 }
 
-void MainWindow::requestContactStatus(QString jid)
-{
-    emit requestStatus(jid);
-}
-
-void MainWindow::sendVoiceNotePlayed(FMessage message)
-{
-    emit voiceNotePlayed(message);
-}
-
 void MainWindow::sendMessageRead(FMessage message)
 {
     emit messageRead(message);
 }
 
-void MainWindow::photoReceived(Contact &c, QImage photo, QString photoId)
-{
-    // I don't think this is needed
-    if (chatWindowList.contains(c.jid))
-    {
-        ChatWindow *chat = (ChatWindow *) chatWindowList.value(c.jid);
-        chat->photoReceivedHandler(photo, photoId);
-    }
-
-    // Emit the signal.  If there's a group/contact info window open it will catch it
-    emit largePhotoReceived(c.jid, photo, photoId);
-
-}
-
-void MainWindow::statusChanged(FMessage message)
-{
-    statusChanged(message.key.remote_jid, QString::fromUtf8(message.data.constData()));
-}
-
-void MainWindow::statusChanged(QString jid, QString status)
-{
-    if (chatWindowList.contains(jid))
-    {
-        ChatWindow *chat = chatWindowList.value(jid);
-        chat->statusChanged(status);
-    }
-
-    if(jid==Client::myJid) emit ownStatusUpdated(status);
-    emit userStatusUpdated(jid);
-}
-
-
-void MainWindow::viewContact(Contact *c)
-{
-    ContactInfoWindow *contactInfoWindow = new ContactInfoWindow(c,this);
-
-    emit requestStatus(c->jid);
-    emit queryLastOnline(c->jid);
-
-    showWindow(contactInfoWindow);
-
-}
-
-void MainWindow::requestSetPhoto(QString jid, QImage photo)
-{
-    emit setPhoto(jid, photo);
-}
-
-void MainWindow::showCreateGroupWindow()
-{
-
-    if (Client::connectionStatus != Client::LoggedIn)
-        QMaemo5InformationBox::information(this,"You need to be logged in to create groups",
-                                           QMaemo5InformationBox::NoTimeout);
-    else
-    {
-        CreateGroupWindow *window = new CreateGroupWindow(roster,this);
-
-        connect(window,SIGNAL(createGroupChat(QImage,QString,QStringList)),
-                this,SLOT(requestCreateGroupChat(QImage,QString,QStringList)));
-
-        showWindow(window);
-    }
-}
-
-void MainWindow::requestCreateGroupChat(QImage photo, QString subject, QStringList participants)
-{
-    emit createGroupChat(photo, subject,participants);
-}
-
-void MainWindow::viewGroup(Group *g)
-{
-    GroupInfoWindow *groupInfoWindow = new GroupInfoWindow(g, roster, this);
-
-    emit photoRequest(g->jid, g->photoId, false);
-    emit getParticipants(g->jid);
-
-    showWindow(groupInfoWindow);
-}
-
-void MainWindow::groupParticipant(QString gjid, QString participant)
-{
-    emit groupParticipantAdded(gjid, participant);
-}
-
-void MainWindow::requestGetParticipants(QString gjid)
-{
-    emit getParticipants(gjid);
-}
-
-void MainWindow::requestAddGroupParticipant(QString gjid, QString participant)
-{
-    emit addGroupParticipant(gjid, participant);
-}
-
-void MainWindow::removeParticipant(QString gjid, QString participant)
-{
-    emit groupParticipantRemoved(gjid, participant);
-}
-
-void MainWindow::requestRemoveGroupParticipant(QString gjid, QString participant)
-{
-    emit removeGroupParticipant(gjid, participant);
-}
-
-void MainWindow::requestPromoteGroupParticipant(QString gjid, QString participant)
-{
-    emit promoteGroupParticipant(gjid, participant);
-}
-
-void MainWindow::groupError(QString gjid)
-{
-    if (chatWindowList.contains(gjid))
-    {
-        GroupWindow *chat = (GroupWindow *)chatWindowList.value(gjid);
-        chat->groupError();
-    }
-}
-
-void MainWindow::showBlockedContactsWindow()
-{
-    emit requestPrivacyList();
-
-    BlockedContactsWindow *blockedContactsWindow =
-            new BlockedContactsWindow(roster, this);
-
-    connect(this,SIGNAL(privacyListRefreshed()),
-            blockedContactsWindow,SLOT(showBlocked()));
-
-    showWindow(blockedContactsWindow);
-}
-
-void MainWindow::blockOrUnblockContact(QString jid, bool blocked)
-{
-    emit requestBlockOrUnblockContact(jid, blocked);
-}
-
-void MainWindow::refreshPrivacyList()
-{
-    emit privacyListRefreshed();
-}
-
 void MainWindow::requestUpdateLastDir(int waType, QString dir)
 {
     emit updateLastDir(waType, dir);
+}
+
+void MainWindow::requestMediaDownload(FMessage message)
+{
+    Client::connection->downloadMedia(message);
+}
+
+void MainWindow::mediaDownloaded(FMessage message)
+{
+    QString jid = message.key.remote_jid;
+
+    if (chatWindowList.contains(jid))
+        chatWindowList.value(jid)->mediaDownloadFinished(message);
+    else
+    {
+        ChatLogger logger;
+        logger.init(jid);
+        logger.updateUriMessage(message);
+    }
+}
+
+void MainWindow::mediaDownloadFailed(FMessage message, QString error)
+{
+    QString jid = message.key.remote_jid;
+
+    if (chatWindowList.contains(jid))
+        chatWindowList.value(jid)->mediaDownloadError(message, error);
+}
+
+void MainWindow::thumbnailReceived(FMessage message)
+{
+    QString jid = message.key.remote_jid;
+
+    if (chatWindowList.contains(jid))
+        chatWindowList.value(jid)->thumbnailReceived(message);
+    else
+    {
+        ChatLogger logger;
+        logger.init(jid);
+        logger.updateMediaData(message);
+    }
 }
 
 void MainWindow::forwardMessage(FMessage message)
@@ -1193,7 +849,7 @@ void MainWindow::forwardMessage(FMessage message)
 
     foreach (QString jid, lastContactsList.keys())
     {
-        Contact& c = roster->getContact(jid);
+        Contact& c = chatContact(jid);
         list.insert(jid, &c);
     }
 
@@ -1206,27 +862,27 @@ void MainWindow::forwardMessage(FMessage message)
         // This will re-open the chat window if it wasn't open yet
         ChatWindow *chat = createChatWindow(contact, true);
 
-        // Generate a new ID
-        message.generateID();
-        message.key.remote_jid = contact.jid;
-
         switch(message.type)
         {
             case FMessage::BodyMessage:
-                chat->sendTextMessage(message);
+            {
+                FMessage msg(contact.jid, true);
+                msg.type = FMessage::BodyMessage;
+                msg.data = message.data;
+                chat->sendTextMessage(msg);
                 break;
+            }
 
             case FMessage::MediaMessage:
-                if (message.media_wa_type == FMessage::Audio ||
-                    message.media_wa_type == FMessage::Image ||
-                    message.media_wa_type == FMessage::Video ||
-                    message.media_wa_type == FMessage::Voice)
-                    chat->sendMultimediaMessage(message.local_file_uri, message.media_wa_type, message.live, message.media_caption);
+                if (!message.local_file_uri.isEmpty())
+                    chat->sendMultimediaMessage(message.local_file_uri, message.media_wa_type,
+                                                false, message.media_caption);
+                else
+                    QMaemo5InformationBox::information(this, "Download the file first to forward it");
                 break;
 
             default:
                 break;
-
         }
     }
 }

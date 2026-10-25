@@ -32,12 +32,13 @@
 #include <QVariant>
 #include <QByteArray>
 #include <QBuffer>
+#include <QDateTime>
 
 #include "globalconstants.h"
 #include "rosterdbmanager.h"
 
 #include "Contacts/group.h"
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
 #define DB_FILENAME "roster.db"
 #define DB_VERSION  5
@@ -50,8 +51,7 @@ RosterDBManager::RosterDBManager(QObject *parent) :
 
 void RosterDBManager::init()
 {
-    QDir home = QDir::home();
-    QFile file(home.path() + HOME_DIR + DB_FILENAME);
+    QFile file(Utilities::dataDir() + "/" DB_FILENAME);
 
     bool dbAvailable = file.exists();
 
@@ -121,8 +121,7 @@ void RosterDBManager::init()
                 db.close();
                 QSqlDatabase::removeDatabase(DB_FILENAME);
 
-                QDir home = QDir::home();
-                QFile file(home.path() + HOME_DIR + DB_FILENAME);
+                QFile file(Utilities::dataDir() + "/" DB_FILENAME);
 
                 file.remove();
 
@@ -197,6 +196,24 @@ void RosterDBManager::updateContact(Contact *c)
     QSqlQuery query(db);
 
     query.exec("BEGIN TRANSACTION");
+    writeContact(c);
+    query.exec("END TRANSACTION");
+}
+
+// Writes many contacts in one transaction
+void RosterDBManager::updateContacts(QList<Contact *> list)
+{
+    QSqlQuery query(db);
+
+    query.exec("BEGIN TRANSACTION");
+    foreach (Contact *c, list)
+        writeContact(c);
+    query.exec("END TRANSACTION");
+}
+
+void RosterDBManager::writeContact(Contact *c)
+{
+    QSqlQuery query(db);
 
     query.prepare("select jid from roster "
                   "where jid = :jid");
@@ -266,8 +283,6 @@ void RosterDBManager::updateContact(Contact *c)
 
         gquery.exec();
     }
-    query.exec("END TRANSACTION");
-
 }
 
 ContactList *RosterDBManager::getAllContacts()
@@ -312,7 +327,7 @@ ContactList *RosterDBManager::getAllContacts()
 
             QSqlQuery subQuery(db);
             subQuery.prepare("select jid from participants where gjid = :gjid");
-            subQuery.bindValue(":jid",g->jid);
+            subQuery.bindValue(":gjid",g->jid);
             subQuery.exec();
 
             while (subQuery.next()) {

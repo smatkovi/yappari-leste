@@ -27,55 +27,28 @@
  * official policies, either expressed or implied, of the copyright holder.
  */
 
-#include <mce/dbus-names.h>
-
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/tcp.h>
-
+#include <QApplication>
 #include <QDateTime>
+#include <QDir>
+#include <QFileInfo>
 #include <QStatusBar>
-#include <QSystemInfo>
-#include <QMessageBox>
+#include <QDBusConnection>
 #include <QMaemo5InformationBox>
 
 #include "version.h"
 #include "client.h"
 #include "globalconstants.h"
 
-#include "Gui/mainwindow.h"
-#include "Gui/registrationwindow.h"
-#include "Gui/changeusernamedialog.h"
+#include "Sql/chatlogger.h"
 
-#include "Whatsapp/fmessage.h"
-#include "Whatsapp/ioexception.h"
-#include "Whatsapp/protocolexception.h"
-#include "Whatsapp/util/utilities.h"
-#include "Whatsapp/util/qtmd5digest.h"
-#include "Whatsapp/util/datetimeutilities.h"
-
-/** ***********************************************************************
- ** Local definitions
- **/
-
-// Maximum size of a profile picture
-#define MAX_PROFILE_PICTURE_SIZE    0xfc00
+#include "util/utilities.h"
 
 /** ***********************************************************************
  ** Static global members
  **/
 
-// Network data counters
-DataCounters Client::dataCounters;
-
 // Status of the connection
 Client::ConnectionStatus Client::connectionStatus;
-
-// Context to make calls to libosso functions
-osso_context_t *Client::osso_context;
-
-// Message number sequence
-quint64 Client::seq;
 
 // Global settings
 QSettings *Client::settings;
@@ -92,45 +65,6 @@ QString Client::textcolor;
 // Own JID
 QString Client::myJid;
 
-// Country code
-QString Client::cc;
-
-// Phone number in local format (without the country code)
-QString Client::number;
-
-// Phone number in international format (with the country code)
-QString Client::phoneNumber;
-
-// User name or alias
-QString Client::userName;
-
-// User password
-QString Client::password;
-
-// IMEI
-QString Client::imei;
-
-// IMSI
-QString Client::imsi;
-
-// Account creation timestamp
-QString Client::creation;
-
-// Account expiration timestamp
-QString Client::expiration;
-
-// Account kind (free/paid)
-QString Client::kind;
-
-// Account status (active/expired)
-QString Client::accountstatus;
-
-// Port to connect to WhatsApp Servers (443/5222)
-quint16 Client::port;
-
-// User status
-QString Client::myStatus;
-
 // Show nicknames in conversations instead of their names from the address book
 bool Client::showNicknames;
 
@@ -143,38 +77,14 @@ bool Client::popupOnFirstMessage;
 // Report when the other party has read messages (in both directions)
 bool Client::blueChecks;
 
-// Automatic download of media if less than this number of bytes
+// Automatic download of media if less than this number of kilobytes
 int Client::automaticDownloadBytes;
-
-// Import media into gallery
-bool Client::importMediaToGallery;
-
-// Last time address book synchronization was performed
-qint64 Client::lastSync;
-
-// What's new window magic number
-qint64 Client::whatsNew;
-
-// Sync setting (on/intl/off)
-QString Client::sync;
-
-// Sync frequency
-int Client::syncFreq;
-
-// Start Yappari on boot
-bool Client::startOnBoot;
-
-// Android password encryption method enabled
-bool Client::android;
-
-// Is a synchronization active?
-bool Client::isSynchronizing;
 
 // Enter is Send
 bool Client::enterIsSend;
 
-// Voice codec (amr/aac)
-QString Client::voiceCodec;
+// Last folder a file was sent from
+QString Client::lastFileDir;
 
 // Main GUI window
 MainWindow *Client::mainWin;
@@ -182,20 +92,11 @@ MainWindow *Client::mainWin;
 // Roster
 ContactRoster *Client::roster;
 
-// Last audio folder used
-QString Client::lastAudioDir;
+// Connection to the yappari-wa daemon
+WAConnection *Client::connection;
 
-// Last video folder used
-QString Client::lastVideoDir;
-
-// Last image folder used
-QString Client::lastImageDir;
-
-// Last profile picture folder used
-QString Client::lastProfileDir;
-
-// Auto close emoji dialog on selection
-bool Client::autoCloseEmoji;
+// Ask WhatsApp for the group list at most this often
+#define GROUPS_REQUEST_INTERVAL     60000
 
 /**
     Constructs a Client object.
@@ -205,40 +106,18 @@ bool Client::autoCloseEmoji;
 */
 Client::Client(bool minimized, QObject *parent) : QObject(parent)
 {
-    // Debug info start
-    QString version = FULL_VERSION;
-    Utilities::logData("Yappari " + version);
-    Utilities::logData("Yappari console debug start");
+    Utilities::logData("Yappari " FULL_VERSION);
 
-    // Read Settings
     readSettings();
 
-    // Initialization of sequence for messages IDs
-    seq = 0;
+    connectionStatus = Connecting;
+    lastGroupsRequest = 0;
 
-    // Contacts roster
-    osso_context = osso_initialize(YAPPARI_APPLICATION_NAME,
-                                   VERSION, FALSE, NULL);
-    int argc = 0;
-    char **argv;
-    osso_abook_init(&argc,&argv,osso_context);
     roster = new ContactRoster(this);
-
-    // Create our own contact if it doesn't exist
-    // or if it's invalid
-    createMyJidContact();
-
-    bool showWhatsNew = false;
-
-    // Show Whatsnew window?
-    if (whatsNew != BUILD_NUMBER)
-    {
-        settings->setValue(SETTINGS_WHATSNEW,BUILD_NUMBER);
-        showWhatsNew = true;
-    }
+    connection = new WAConnection(this);
 
     // Create main window application
-    mainWin = new MainWindow(roster, showWhatsNew);
+    mainWin = new MainWindow(roster);
 
     connect(mainWin,SIGNAL(settingsUpdated()),
             this,SLOT(updateSettings()));
@@ -246,74 +125,74 @@ Client::Client(bool minimized, QObject *parent) : QObject(parent)
     connect(mainWin,SIGNAL(sendMessage(FMessage)),
             this,SLOT(queueMessage(FMessage)));
 
-    connect(mainWin,SIGNAL(sendSetGroupSubject(QString,QString)),
-            this,SLOT(sendSetGroupSubject(QString,QString)));
-
-    connect(mainWin,SIGNAL(requestLeaveGroup(QString)),
-            this,SLOT(requestLeaveGroup(QString)));
-
-    connect(mainWin,SIGNAL(getMyStatus()),
-            this,SLOT(getMyStatus()));
-
-    connect(mainWin,SIGNAL(changeStatus(QString)),
-            this,SLOT(changeStatus(QString)));
-
-    connect(mainWin,SIGNAL(changeUserName(QString)),
-            this,SLOT(changeUserName(QString)));
-
-    connect(mainWin,SIGNAL(sync()),
-            this,SLOT(synchronizeContacts()));
-
-    connect(mainWin,SIGNAL(queryLastOnline(QString)),
-            this,SLOT(requestQueryLastOnline(QString)));
+    connect(mainWin,SIGNAL(messageRead(FMessage)),
+            this,SLOT(sendMessageRead(FMessage)));
 
     connect(mainWin,SIGNAL(subscribe(QString)),
-            this,SLOT(requestPresenceSubscription(QString)));
+            this,SLOT(subscribe(QString)));
 
-    connect(mainWin,SIGNAL(unsubscribe(QString)),
-            this,SLOT(requestPresenceUnsubscription(QString)));
+    connect(mainWin,SIGNAL(queryLastOnline(QString)),
+            this,SLOT(subscribe(QString)));
 
     connect(mainWin,SIGNAL(photoRequest(QString,QString,bool)),
             this,SLOT(updatePhoto(QString,QString,bool)));
 
-    connect(mainWin,SIGNAL(requestStatus(QString)),
-            this,SLOT(sendGetStatus(QString)));
-
-    connect(mainWin,SIGNAL(setPhoto(QString,QImage)),
-            this,SLOT(setPhoto(QString,QImage)));
-
-    connect(mainWin,SIGNAL(createGroupChat(QImage,QString,QStringList)),
-            this,SLOT(createGroupChat(QImage,QString,QStringList)));
-
-    connect(mainWin,SIGNAL(getParticipants(QString)),
-            this,SLOT(getParticipants(QString)));
-
-    connect(mainWin, SIGNAL(addGroupParticipant(QString,QString)),
-            this,SLOT(sendAddGroupParticipant(QString,QString)));
-
-    connect(mainWin, SIGNAL(removeGroupParticipant(QString,QString)),
-            this,SLOT(sendRemoveGroupParticipant(QString,QString)));
-
-    connect(mainWin, SIGNAL(promoteGroupParticipant(QString,QString)),
-            this,SLOT(sendPromoteGroupParticipant(QString,QString)));
-
-    connect(mainWin, SIGNAL(requestPrivacyList()),
-            this, SLOT(requestPrivacyList()));
-
-    connect(mainWin, SIGNAL(requestBlockOrUnblockContact(QString,bool)),
-            this, SLOT(blockOrUnblockContact(QString,bool)));
-
-    connect(mainWin,SIGNAL(voiceNotePlayed(FMessage)),
-            this, SLOT(sendVoiceNotePlayed(FMessage)));
-
-    connect(mainWin,SIGNAL(messageRead(FMessage)),
-            this, SLOT(sendMessageRead(FMessage)));
+    connect(mainWin,SIGNAL(sync()),
+            this,SLOT(synchronizeContacts()));
 
     connect(mainWin,SIGNAL(updateLastDir(int,QString)),
-            this, SLOT(updateLastDir(int,QString)));
+            this,SLOT(updateLastDir(int,QString)));
 
-    if (!minimized)
-        mainWin->show();
+    // The daemon's signals
+
+    connect(connection,SIGNAL(stateChanged(QString)),
+            this,SLOT(stateChanged(QString)));
+
+    connect(connection,SIGNAL(messageReceived(FMessage)),
+            this,SLOT(messageReceived(FMessage)));
+
+    connect(connection,SIGNAL(historyReceived(FMessage)),
+            this,SLOT(historyReceived(FMessage)));
+
+    connect(connection,SIGNAL(receiptReceived(QString,QString,QStringList,QString,qint64)),
+            this,SLOT(receiptReceived(QString,QString,QStringList,QString,qint64)));
+
+    connect(connection,SIGNAL(composing(QString,QString,QString)),
+            mainWin,SLOT(composing(QString,QString,QString)));
+
+    connect(connection,SIGNAL(paused(QString,QString)),
+            mainWin,SLOT(paused(QString,QString)));
+
+    connect(connection,&WAConnection::presenceChanged,
+            this,[](QString jid, bool available, qint64 lastSeen) {
+        mainWin->available(jid, available);
+        if (!available && lastSeen > 0)
+            mainWin->available(jid, lastSeen * 1000);
+    });
+
+    connect(connection,&WAConnection::contactsReceived,
+            this,&Client::contactsReceived);
+
+    connect(connection,&WAConnection::groupsReceived,
+            this,&Client::groupsReceived);
+
+    connect(connection,SIGNAL(profilePictureReceived(QString,QString)),
+            this,SLOT(profilePictureReceived(QString,QString)));
+
+    connect(connection,SIGNAL(thumbnailReceived(FMessage)),
+            mainWin,SLOT(thumbnailReceived(FMessage)));
+
+    connect(connection,SIGNAL(mediaDownloaded(FMessage)),
+            mainWin,SLOT(mediaDownloaded(FMessage)));
+
+    connect(connection,SIGNAL(mediaDownloadFailed(FMessage,QString)),
+            mainWin,SLOT(mediaDownloadFailed(FMessage,QString)));
+
+    historyTimer.setSingleShot(true);
+    connect(&historyTimer,SIGNAL(timeout()),this,SLOT(processHistory()));
+
+    connect(qApp,SIGNAL(applicationStateChanged(Qt::ApplicationState)),
+            this,SLOT(applicationStateChanged(Qt::ApplicationState)));
 
     // Status bar
     QStatusBar *bar = mainWin->statusBar();
@@ -321,103 +200,28 @@ Client::Client(bool minimized, QObject *parent) : QObject(parent)
     bar->showMessage(FULL_VERSION);
     bar->show();
 
-    // Create DBus server
+    // Subscribe to the daemon's signals first, then take our bus name: the
+    // daemon queues signals while the name is not on the bus.
+    connection->start();
+
     ifAdaptor = new DBusIfAdaptor(this);
     QDBusConnection sessionbus = QDBusConnection::sessionBus();
-    bool ret = sessionbus.registerService(YAPPARI_SERVICE);
-    ret = sessionbus.registerObject(YAPPARI_OBJECT, this);
+    sessionbus.registerObject(YAPPARI_OBJECT, this);
+    if (!sessionbus.registerService(YAPPARI_SERVICE))
+        Utilities::logData("Could not register " YAPPARI_SERVICE);
 
-    // Listen for screen lock changes
-    QDBusConnection systembus = QDBusConnection::systemBus();
-    mceAdaptor = new DBusNokiaMCESignalIf(MCE_SERVICE,
-                                          MCE_SIGNAL_PATH,
-                                          systembus,
-                                          this);
-    //connect(mce,SIGNAL(tklock_mode_ind(QString)),
-    //        mainWin,SLOT(lockModeChanged(QString)));
+    connection->replayQueued();
 
-    connect(mceAdaptor,SIGNAL(display_status_ind(QString)),
-            mainWin,SLOT(lockModeChanged(QString)));
-
-    // Show Status Menu Applet
-    applet = new DBusAppletIf(APPLET_SERVICE,APPLET_OBJECT,sessionbus,this);
-    applet->ShowApplet();
-
-    // Timers
-    keepAliveTimer = new QTimer(this);
-    pendingMessagesTimer = new QTimer(this);
-    retryLoginTimer = new QTimer(this);
-
-    connect(keepAliveTimer, SIGNAL(timeout()), this, SLOT(keepAlive()));
-    connect(pendingMessagesTimer, SIGNAL(timeout()), this, SLOT(sendMessagesInQueue()));
-    connect(retryLoginTimer, SIGNAL(timeout()), this, SLOT(verifyAndConnect()));
-
-    if (isRegistered)
-    {
-        // Not connected
-        connectionStatus = WaitingForConnection;
-
-        while (this->userName.isEmpty())
-        {
-            ChangeUserNameDialog dialog(mainWin);
-
-            if (dialog.exec() == QDialog::Accepted)
-            {
-                this->userName = dialog.getUserName();
-                settings->setValue(SETTINGS_USERNAME,userName);
-            }
-        }
-    }
-    else
-        connectionStatus = Disconnected;
-
-    // Contacts syncer
-    syncer = new ContactSyncer(roster, this);
-
-    connect(syncer,SIGNAL(phoneListReady(QStringList)),
-            this, SLOT(sendSyncContacts(QStringList)));
-
-    connect(syncer,SIGNAL(statusListReady(QStringList)),
-            this, SLOT(sendGetStatus(QStringList)));
-
-    connect(syncer,SIGNAL(progress(int)),
-            this, SLOT(syncProgress(int)));
-
-    connect(syncer,SIGNAL(updatePhoto(QString,QString,bool)),
-            this,SLOT(updatePhoto(QString,QString,bool)));
-
-    connect(syncer,SIGNAL(syncFinished()),
-            this,SLOT(syncFinished()));
-
-    isSynchronizing = false;
-    sendGetConnectionStatus();
-
-    // Network Manager Configutarion
-    manager = new QNetworkConfigurationManager(this);
-    connect(manager,SIGNAL(onlineStateChanged(bool)),
-            this,SLOT(networkStatusChanged(bool)));
-
-    connect(manager,SIGNAL(configurationChanged(QNetworkConfiguration)),
-            this,SLOT(networkConfigurationChanged(QNetworkConfiguration)));
-
-#ifdef Q_WS_SCRATCHBOX
-    isOnline = true;
-#else
-    isOnline = manager->isOnline();
-#endif
-    networkStatusChanged(isOnline);
+    if (!minimized)
+        mainWin->show();
 }
 
 /**
-    Destroys a Connection object
+    Destroys a Client object
 */
 Client::~Client()
 {
-    // Update data counters
-    dataCounters.writeCounters();
-
     Utilities::logData("Application destroyed");
-    applet->HideApplet();
 }
 
 /** ***********************************************************************
@@ -429,116 +233,29 @@ Client::~Client()
 */
 void Client::readSettings()
 {
-    // Check the directories are created
-    QDir home = QDir::home();
-    if (!home.exists(home.path() + LOGS_DIR))
-        home.mkpath(home.path() + LOGS_DIR);
-
-    if (!home.exists(home.path() + CONF_DIR))
-        home.mkpath(home.path() + CONF_DIR);
-
-    this->settings = new QSettings(SETTINGS_ORGANIZATION,SETTINGS_APPLICATION,this);
-
-    // Need registration verification
-    isRegistered = ((settings->contains(SETTINGS_REGISTERED) &&
-        settings->value(SETTINGS_REGISTERED).toBool())) ? true : false;
+    settings = new QSettings(SETTINGS_ORGANIZATION,SETTINGS_APPLICATION,this);
 
     // Colors
-    this->mycolor = settings->value(SETTINGS_MYCOLOR).toString();
-    this->textcolor = settings->value(SETTINGS_TEXTCOLOR).toString();
-    this->nickcolor = settings->value(SETTINGS_NICKCOLOR).toString();
+    mycolor = settings->value(SETTINGS_MYCOLOR).toString();
+    textcolor = settings->value(SETTINGS_TEXTCOLOR).toString();
+    nickcolor = settings->value(SETTINGS_NICKCOLOR).toString();
 
-    // Status
-    this->myStatus = settings->value(SETTINGS_STATUS).toString();
+    showNicknames = settings->value(SETTINGS_SHOW_NICKNAMES,
+                                    QVariant(DEFAULT_SHOW_NICKNAMES)).toBool();
+    showNumbers = settings->value(SETTINGS_SHOW_NUMBERS,
+                                  QVariant(DEFAULT_SHOW_NUMBERS)).toBool();
+    popupOnFirstMessage = settings->value(SETTINGS_POPUP_ON_FIRST_MESSAGE,
+                                          QVariant(DEFAULT_POPUP_ON_FIRST_MESSAGE)).toBool();
+    blueChecks = settings->value(SETTINGS_BLUE_CHECKS,
+                                 QVariant(DEFAULT_BLUE_CHECKS)).toBool();
+    automaticDownloadBytes = settings->value(SETTINGS_AUTOMATIC_DOWNLOAD,
+                                             QVariant(DEFAULT_AUTOMATIC_DOWNLOAD)).toInt();
+    enterIsSend = settings->value(SETTINGS_ENTER_IS_SEND,
+                                  QVariant(DEFAULT_ENTER_IS_SEND)).toBool();
 
-    // Sync
-    this->sync = settings->value(SETTINGS_SYNC).toString();
-    this->syncFreq = settings->value(SETTINGS_SYNC_FREQ,QVariant(DEFAULT_SYNC_FREQ)).toInt();
-
-    // Android
-    this->android = settings->value(SETTINGS_ANDROID).toBool();
-
-    // Account
-    this->cc = settings->value(SETTINGS_CC).toString();
-    this->number = settings->value(SETTINGS_NUMBER).toString();
-    this->phoneNumber = settings->value(SETTINGS_PHONENUMBER).toString();
-    this->password = settings->value(SETTINGS_PASSWORD).toString();
-    this->myJid = phoneNumber + "@s.whatsapp.net";
-    this->userName = settings->value(SETTINGS_USERNAME).toString();
-    this->imei = settings->value(SETTINGS_IMEI).toString();
-    this->imsi = settings->value(SETTINGS_IMSI).toString();
-    this->creation = settings->value(SETTINGS_CREATION).toString();
-    this->kind = settings->value(SETTINGS_KIND).toString();
-    this->expiration = settings->value(SETTINGS_EXPIRATION).toString();
-    this->accountstatus = settings->value(SETTINGS_ACCOUNTSTATUS).toString();
-
-    // Port
-    this->port = settings->value(SETTINGS_PORT,QVariant(DEFAULT_PORT)).toInt();
-
-    // Show nicknames in conversations
-    this->showNicknames = settings->value(SETTINGS_SHOW_NICKNAMES,
-                                          QVariant(DEFAULT_SHOW_NICKNAMES)).toBool();
-
-    // Show phone numbers in select contact dialog
-    this->showNumbers = settings->value(SETTINGS_SHOW_NUMBERS,
-                                          QVariant(DEFAULT_SHOW_NUMBERS)).toBool();
-
-    // Pop up conversation window when first message is received
-    this->popupOnFirstMessage = settings->value(SETTINGS_POPUP_ON_FIRST_MESSAGE,
-                                                  QVariant(DEFAULT_POPUP_ON_FIRST_MESSAGE)).toBool();
-
-    // Report when the other party has read messages (in both directions)
-    this->blueChecks = settings->value(SETTINGS_BLUE_CHECKS,
-                                                  QVariant(DEFAULT_BLUE_CHECKS)).toBool();
-
-    // Automatic download bytes
-    this->automaticDownloadBytes = settings->value(SETTINGS_AUTOMATIC_DOWNLOAD,
-                                                   QVariant(DEFAULT_AUTOMATIC_DOWNLOAD)).toInt();
-
-    // Automatic import of downloaded media into gallery
-    this->importMediaToGallery = settings->value(SETTINGS_IMPORT_TO_GALLERY,
-                                                  QVariant(DEFAULT_IMPORT_TO_GALLERY)).toBool();
-
-    // Last Synchronization
-    this->lastSync = settings->value(SETTINGS_LAST_SYNC).toLongLong();
-
-    // Start on Boot
-    this->startOnBoot = settings->value(SETTINGS_START_ON_BOOT,
-                                        QVariant(DEFAULT_START_ON_BOOT)).toBool();
-
-    // What's New Window
-    this->whatsNew = settings->value(SETTINGS_WHATSNEW).toLongLong();
-
-    // Enter is Send
-    this->enterIsSend = settings->value(SETTINGS_ENTER_IS_SEND,
-                                        QVariant(DEFAULT_ENTER_IS_SEND)).toBool();
-
-    // Voice codec (amr/aac)
-    this->voiceCodec = settings->value(SETTINGS_VOICE_CODEC,
-                                       QVariant(DEFAULT_VOICE_CODEC)).toString();
-
-    // Last folders
-    this->lastAudioDir = settings->value(SETTINGS_LAST_AUDIO_DIR,
-                                         Utilities::getPathFor(FMessage::Audio,
-                                                               true)).toString();
-    this->lastVideoDir = settings->value(SETTINGS_LAST_VIDEO_DIR,
-                                         Utilities::getPathFor(FMessage::Video,
-                                                               true)).toString();
-    this->lastImageDir = settings->value(SETTINGS_LAST_IMAGE_DIR,
-                                         Utilities::getPathFor(FMessage::Image,
-                                                               true)).toString();
-
-    this->lastProfileDir = settings->value(SETTINGS_LAST_PROFILE_DIR,
-                                           Utilities::getPathFor(FMessage::Image,
-                                                                 true)).toString();
-
-    // Auto close emoji dialog on selection
-    this->autoCloseEmoji = settings->value(SETTINGS_AUTO_CLOSE_EMOJI,
-                                           QVariant(DEFAULT_AUTO_CLOSE_EMOJI)).toBool();
-
-    // Read counters
-    dataCounters.readCounters();
-    lastCountersWrite = QDateTime::currentMSecsSinceEpoch();
+    QString myDocs = QDir::homePath() + "/MyDocs";
+    lastFileDir = settings->value(SETTINGS_LAST_FILE_DIR,
+                                  QDir(myDocs).exists() ? myDocs : QDir::homePath()).toString();
 }
 
 /**
@@ -546,773 +263,88 @@ void Client::readSettings()
 */
 void Client::updateSettings()
 {
-    // We just update the settings that are configurable
-    // through GUI
-
-    settings->setValue(SETTINGS_SYNC,sync);
-    settings->setValue(SETTINGS_PORT,port);
     settings->setValue(SETTINGS_SHOW_NICKNAMES,showNicknames);
     settings->setValue(SETTINGS_SHOW_NUMBERS,showNumbers);
     settings->setValue(SETTINGS_POPUP_ON_FIRST_MESSAGE,popupOnFirstMessage);
     settings->setValue(SETTINGS_BLUE_CHECKS,blueChecks);
     settings->setValue(SETTINGS_AUTOMATIC_DOWNLOAD,automaticDownloadBytes);
-    settings->setValue(SETTINGS_IMPORT_TO_GALLERY,importMediaToGallery);
-    settings->setValue(SETTINGS_SYNC_FREQ,syncFreq);
-    settings->setValue(SETTINGS_START_ON_BOOT,startOnBoot);
     settings->setValue(SETTINGS_ENTER_IS_SEND,enterIsSend);
-    settings->setValue(SETTINGS_VOICE_CODEC,voiceCodec);
-    settings->setValue(SETTINGS_AUTO_CLOSE_EMOJI,autoCloseEmoji);
+}
 
-    QDir home = QDir::home();
-    QString startFile = home.path() + START_FILE;
+void Client::updateLastDir(int waType, QString dir)
+{
+    Q_UNUSED(waType);
 
-    if (!startOnBoot && home.exists(startFile))
-        home.remove(startFile);
-    else if (startOnBoot && !home.exists(startFile))
-    {
-        QFile file(startFile);
-        if (file.open(QIODevice::WriteOnly | QIODevice::Text))
-            file.close();
-    }
+    lastFileDir = dir;
+    settings->setValue(SETTINGS_LAST_FILE_DIR,lastFileDir);
 }
 
 /** ***********************************************************************
- ** Network detection methods
+ ** Connection state
  **/
 
-/**
-    Handles a network change
-
-    @param isOnline     True if an network connection is currently available
-*/
-void Client::networkStatusChanged(bool isOnline)
+void Client::stateChanged(QString state)
 {
-    QString status = (isOnline) ? "Online" : "Offline";
-    Utilities::logData("Network connection changed: " + status);
-
-    this->isOnline = isOnline;
-
-    if (!isOnline)
-    {
-        activeNetworkID.clear();
-        if (connectionStatus == Connected || connectionStatus == LoggedIn)
-            connectionClosed();
-    }
+    if (state == "connected")
+        connectionStatus = LoggedIn;
+    else if (state == "connecting")
+        connectionStatus = Connecting;
+    else if (state == "logged-out")
+        connectionStatus = Registering;
     else
-    {
-        updateActiveNetworkID();
-        if (connectionStatus == Disconnected || connectionStatus == WaitingForConnection)
-            verifyAndConnect();
-    }
-}
-
-void Client::networkConfigurationChanged(QNetworkConfiguration conf)
-{
-    if (conf.state() == QNetworkConfiguration::Active)
-    {
-        Utilities::logData("Network activated: " + conf.identifier());
-    }
-    else
-    {
-        Utilities::logData("Network deactivated: " + conf.identifier());
-    }
-
-    if (isOnline && (connectionStatus == Connected || connectionStatus == LoggedIn) &&
-            conf.state() == QNetworkConfiguration::Active &&
-            activeNetworkID != conf.identifier())
-    {
-        isOnline = false;
-        QTimer::singleShot(0,this,SLOT(connectionClosed()));
-        QTimer::singleShot(3000,this,SLOT(connectionActivated()));
-    }
-}
-
-void Client::connectionActivated()
-{
-    networkStatusChanged(true);
-}
-
-void Client::connectionDeactivated()
-{
-    networkStatusChanged(false);
-}
-
-bool Client::isNetworkAvailable()
-{
-    return isOnline;
-}
-
-void Client::updateActiveNetworkID()
-{
-#ifdef Q_WS_SCRATCHBOX
-    activeNetworkID = "Scratchbox";
-#else
-    if (isOnline)
-    {
-        // Let's save the current configuration identifier
-        QList<QNetworkConfiguration> activeConfigs = manager->allConfigurations(QNetworkConfiguration::Active);
-        for (int i = 0; i < activeConfigs.size(); i++)
-        {
-            QNetworkConfiguration conf = activeConfigs.at(i);
-            if (conf.state() == QNetworkConfiguration::Active)
-            {
-                activeNetworkID = conf.identifier();
-                Utilities::logData("Current active connection: " + activeNetworkID);
-                return;
-            }
-        }
-    }
-#endif
-}
-
-void Client::startRegistration()
-{
-    connectionMutex.lock();
-    connectionStatus = Registering;
-    sendGetConnectionStatus();
-
-    RegistrationWindow *regWindow = new RegistrationWindow(mainWin);
-
-    connect(regWindow,SIGNAL(accept(QVariantMap)),
-            this,SLOT(registrationSuccessful(QVariantMap)));
-
-    regWindow->setAttribute(Qt::WA_Maemo5StackedWindow);
-    regWindow->setAttribute(Qt::WA_DeleteOnClose);
-    regWindow->setWindowFlags(regWindow->windowFlags() | Qt::Window);
-    regWindow->show();
-}
-
-void Client::registrationSuccessful(QVariantMap result)
-{
-    cc = result["cc"].toString();
-    number = result["number"].toString();
-    phoneNumber = result["login"].toString();
-    password = result["pw"].toString();
-    myJid = phoneNumber + "@s.whatsapp.net";
-    isRegistered = true;
-
-    settings->setValue(SETTINGS_REGISTERED,isRegistered);
-    settings->setValue(SETTINGS_NUMBER,number);
-    settings->setValue(SETTINGS_CC,cc);
-    settings->setValue(SETTINGS_PHONENUMBER,phoneNumber);
-    settings->setValue(SETTINGS_PASSWORD,password);
-
-    connectionStatus = Disconnected;
-    sendGetConnectionStatus();
-
-    connectionMutex.unlock();
-
-    while (this->userName.isEmpty())
-    {
-        ChangeUserNameDialog dialog(mainWin);
-
-        if (dialog.exec() == QDialog::Accepted)
-        {
-            this->userName = dialog.getUserName();
-            settings->setValue(SETTINGS_USERNAME,userName);
-        }
-    }
-
-    networkStatusChanged(isNetworkAvailable());
-}
-
-void Client::verifyAndConnect()
-{
-    QSystemDeviceInfo deviceInfo(this);
-#ifdef Q_WS_SCRATCHBOX
-    QString imsi = "000000000000000";
-#else
-    QString imsi = deviceInfo.imsi();
-#endif
-
-    if (!imsi.isEmpty())
-    {
-        if (!this->imsi.isEmpty() && this->imsi != imsi)
-        {
-            // SIM Card changed
-            QMessageBox msg(mainWin);
-
-            msg.setText("A new SIM Card was detected.\n"
-                        "Do you want to register the new number?");
-            msg.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
-
-            if (msg.exec() == QMessageBox::Yes)
-            {
-                isRegistered = false;
-            }
-        }
-
-        if (this->imsi != imsi)
-        {
-            this->imsi = imsi;
-            settings->setValue(SETTINGS_IMSI,imsi);
-        }
-    }
-
-    // Verify if the user is registered
-    if (!isRegistered)
-        startRegistration();
-    else
-        connectToServer();
-
-    connectionMutex.unlock();
-
-}
-
-void Client::connectToServer()
-{
-    connectionMutex.lock();
-
-    if (connectionStatus == Connected || connectionStatus == Connecting ||
-        connectionStatus == Registering)
-    {
-        connectionMutex.unlock();
-        return;
-    }
-
-    // Verify there's an available connection
-
-    if (!isNetworkAvailable())
-    {
-        Utilities::logData("No network available. Waiting for a connection...");
         connectionStatus = WaitingForConnection;
-        sendGetConnectionStatus();
-        connectionMutex.unlock();
-        return;
-    }
 
-    connectionStatus = Connecting;
-    sendGetConnectionStatus();
+    if (!connection->ownJid().isEmpty())
+        myJid = connection->ownJid();
 
-    // If there's a network mode change it will never reach this point
-    // so it's safe to unlock de mutex here
-    connectionMutex.unlock();
-
-    // There's a connection available, now connect
-    QString host = SERVER_DOMAIN;
-
-    Utilities::logData("Connecting to " + host + ":" + QString::number(port) + "...");
-
-    socket = new QTcpSocket(this);
-    socket->connectToHost(host,port);
-
-    // qRegisterMetaType<QAbstractSocket::SocketError>("SocketError");
-    // connect(socket,SIGNAL(hostFound()),this,SLOT(desktopFound()));
-    connect(socket,SIGNAL(connected()),this,SLOT(connected()));
-    connect(socket,SIGNAL(error(QAbstractSocket::SocketError)),
-            this,SLOT(error(QAbstractSocket::SocketError)));
-    connect(socket,SIGNAL(disconnected()),this,SLOT(connectionClosed()));
-}
-
-void Client::connected()
-{
-    // Set SO_KEEPALIVE option
-    socket->setSocketOption(QAbstractSocket::KeepAliveOption,1);
-    int fd = socket->socketDescriptor();
-
-    // Set TCP_KEEPIDLE option
-    int optval = 300;
-    socklen_t optlen = sizeof(optval);
-
-    setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, &optval, optlen);
-
-    connectionStatus = Connected;
-    Utilities::logData("Connected successfully");
-
-    // QString password = Utilities::getChatPassword();
-
-    QByteArray password = (this->password.isEmpty())
-                                ? Utilities::getChatPassword().toUtf8()
-                                : QByteArray::fromBase64(this->password.toUtf8());
-
-    // Utilities::logData("Password: " + password);
-
-    connection = new Connection(socket,JID_DOMAIN,RESOURCE,phoneNumber,
-                                userName,password,&dataCounters,this);
-
-    QByteArray nextChallenge = QByteArray::fromBase64(settings->value(SETTINGS_NEXTCHALLENGE).toByteArray());
-    settings->remove(SETTINGS_NEXTCHALLENGE);
-
-    // Utilities::logData("Challenge: " + QString::fromLatin1(nextChallenge.toHex()));
-
-    try
-    {
-        // Never send previous challenge to avoid expiration of it
-        nextChallenge.clear();
-
-        connect(socket,SIGNAL(readyRead()),this,SLOT(read()));
-
-        connect(connection,SIGNAL(loginSuccess()),this,SLOT(loginSuccess()));
-        connect(connection,SIGNAL(loginFailed()),this,SLOT(loginFailed()));
-
-        connection->login(nextChallenge);
-    }
-    catch (IOException &e)
-    {
-        lastError = e.toString();
-        Utilities::logData("connected(): There was an IO Exception: " + lastError);
-        connectionClosed();
-        showConnectionStatus(lastError + " Retrying in 10 seconds..");
-        return;
-    }
-    catch (ProtocolException &e)
-    {
-        lastError = e.toString();
-        Utilities::logData("connected(): There was a Protocol Exception: " + lastError);
-        connectionClosed();
-        showConnectionStatus("Protocol Exception");
-        return;
-    }
-}
-
-void Client::synchronizeContacts()
-{
-    QTimer::singleShot(0,syncer,SLOT(syncContacts()));
-}
-
-void Client::sendSyncContacts(QStringList numbers)
-{
-    if (connectionStatus == LoggedIn)
-        connection->sendSyncContacts(numbers);
-}
-
-void Client::sendGetStatus(QString jid)
-{
-    sendGetStatus(QStringList(jid));
-}
-
-void Client::sendGetStatus(QStringList jids)
-{
-    Utilities::logData("sendGetStatus(): Requesting status of " + jids.join(" "));
+    showConnectionStatus(parseConnectionStatus());
 
     if (connectionStatus == LoggedIn)
-        connection->sendGetStatus(jids);
-}
-
-void Client::syncHttpError(int error)
-{
-    QMaemo5InformationBox::information(mainWin,"There has been a fatal error synchronizing contacts.\nWhatsApp Servers down? Error = " +
-                                       QString::number(error),
-                                       QMaemo5InformationBox::NoTimeout);
-
-    syncFinished();
-}
-
-void Client::syncSslError()
-{
-    QMaemo5InformationBox::information(mainWin,"SSL error while trying to synchronize contacts.\nMaybe bad time & date settings on the phone?",
-                                       QMaemo5InformationBox::NoTimeout);
-
-    syncFinished();
-}
-
-
-void Client::syncProgress(int progress)
-{
-    QString status = parseConnectionStatus() + " (Synchronizing contacts ... " +
-                     QString::number(progress) + "%)";
-
-    showConnectionStatus(status);
-}
-
-void Client::syncFinished()
-{
-    Utilities::logData("Synchronization finished");
-    isSynchronizing = false;
-    sendGetConnectionStatus();
-}
-
-void Client::getMyStatus()
-{
-    sendGetStatus(myJid);
-}
-
-void Client::changeStatus(QString newStatus)
-{
-    settings->setValue(SETTINGS_STATUS,newStatus);
-    connection->sendSetStatus(newStatus);
-}
-
-void Client::changeUserName(QString newUserName)
-{
-    userName = newUserName;
-
-    settings->setValue(SETTINGS_USERNAME,userName);
-
-    connection->setNewUserName(userName);
-}
-
-void Client::error(QAbstractSocket::SocketError socketError)
-{
-    IOException e(socketError);
-    lastError = e.toString();
-
-    QString s = "There was an IO error: " + lastError;
-    Utilities::logData(s);
-
-    connectionClosed();
-    showConnectionStatus(lastError);
-}
-
-void Client::connectionClosed()
-{
-    connectionMutex.lock();
-    Utilities::logData("Connection closed.");
-
-    // Stop all timers
-    Utilities::logData("Stopping timers.");
-    keepAliveTimer->stop();
-    pendingMessagesTimer->stop();
-
-    Utilities::logData("Freeing up the connection.");
-    if (connectionStatus == Connected || connectionStatus == LoggedIn ||
-            connectionStatus == LoginFailure)
-         connection->deleteLater();
-
-    if (connectionStatus != Disconnected)
-    {
-        Utilities::logData("Freeing up the socket.");
-        disconnect(socket,0,0,0);
-            socket->disconnectFromHost();
-        socket->deleteLater();
-    }
-
-    if (isSynchronizing)
-        syncer->finishSync();
-
-    // Sometimes the network is available but there was an error
-    // because a DNS problem or can't reach the server at the moment.
-    // In these cases the client should retry
-    if (isNetworkAvailable())
-    {
-        connectionStatus = Disconnected;
-
-        if (!isRegistered)
-        {
-            // Immediately try to re-register
-            QTimer::singleShot(0,this,SLOT(verifyAndConnect()));
-        }
-        else
-        {
-            Utilities::logData("Yappari will retry the connection in 10 seconds.");
-            retryLoginTimer->setSingleShot(true);
-            retryLoginTimer->start(RETRY_LOGIN_INTERVAL);
-        }
-    }
-    else
-    {
-        Utilities::logData("Waiting for a connection.");
-        connectionStatus = WaitingForConnection;
-    }
-
-    sendGetConnectionStatus();
-    connectionMutex.unlock();
-}
-
-void Client::loginSuccess()
-{
-    settings->setValue(SETTINGS_NEXTCHALLENGE, QString::fromUtf8(connection->nextChallenge.toBase64()));
-
-    settings->setValue(SETTINGS_CREATION, connection->creation);
-    settings->setValue(SETTINGS_EXPIRATION, connection->expiration);
-    settings->setValue(SETTINGS_KIND, connection->kind);
-    settings->setValue(SETTINGS_ACCOUNTSTATUS, connection->accountstatus);
-
-    connectionStatus = LoggedIn;
-    sendGetConnectionStatus();
-
-    connect(connection,SIGNAL(timeout()),this,SLOT(connectionClosed()));
-
-    connect(connection,SIGNAL(groupNewSubject(QString,QString,QString,QString,QString)),
-            this,SLOT(groupNewSubject(QString,QString,QString,QString,QString)));
-
-    connect(connection,SIGNAL(groupInfoFromList(QString,QString,QString,QString,
-                                                QString,QString,QString)),
-            this,SLOT(groupInfoFromList(QString,QString,QString,QString,
-                                        QString,QString,QString)));
-
-    connect(connection,SIGNAL(messageReceived(FMessage)),
-            mainWin,SLOT(messageReceived(FMessage)));
-
-    connect(connection,SIGNAL(messageStatusUpdate(FMessage)),
-            mainWin,SLOT(messageStatusUpdate(FMessage)));
-
-    connect(connection,SIGNAL(available(QString,bool)),
-            mainWin,SLOT(available(QString,bool)));
-
-    connect(connection,SIGNAL(composing(QString,QString,QString)),
-            mainWin,SLOT(composing(QString,QString,QString)));
-
-    connect(connection,SIGNAL(paused(QString,QString)),
-            mainWin,SLOT(paused(QString,QString)));
-
-    connect(connection,SIGNAL(groupLeft(QString)),
-            mainWin,SLOT(groupLeft(QString)));
-
-    connect(connection,SIGNAL(userStatusUpdated(FMessage)),
-            this,SLOT(userStatusUpdated(FMessage)));
-
-    connect(connection,SIGNAL(lastOnline(QString,qint64)),
-            mainWin,SLOT(available(QString,qint64)));
-
-    connect(connection,SIGNAL(mediaUploadAccepted(FMessage)),
-            mainWin,SLOT(mediaUploadAccepted(FMessage)));
-
-    connect(connection,SIGNAL(photoIdReceived(QString,QString,QString)),
-            this,SLOT(photoIdReceived(QString,QString,QString)));
-
-    connect(connection,SIGNAL(photoReceived(QString,QByteArray,QString,bool)),
-            this,SLOT(photoReceived(QString,QByteArray,QString,bool)));
-
-    connect(connection,SIGNAL(photoDeleted(QString,QString)),
-            this,SLOT(photoDeleted(QString,QString)));
-
-    connect(connection,SIGNAL(groupUser(QString,QString)),
-            this,SLOT(groupUser(QString,QString)));
-
-    connect(connection,SIGNAL(groupAddUser(QString,QString)),
-            this,SLOT(groupAddUser(QString,QString)));
-
-    connect(connection,SIGNAL(groupRemoveUser(QString,QString)),
-            this,SLOT(groupRemoveUser(QString,QString)));
-
-    connect(connection,SIGNAL(groupError(QString)),
-            mainWin,SLOT(groupError(QString)));
-
-    connect(connection,SIGNAL(privacyListReceived(QStringList)),
-            this,SLOT(privacyListReceived(QStringList)));
-
-    connect(connection,SIGNAL(contactSync(QString,QString)),
-            syncer, SLOT(syncPhone(QString, QString)));
-
-    connect(connection,SIGNAL(statusChanged(QString,qint64,QString)),
-            this,SLOT(statusChanged(QString,qint64,QString)));
-
-    connect(connection,SIGNAL(contactDeleted(QString,QString)),
-            syncer, SLOT(deletePhone(QString, QString)));
-
-    connect(connection,SIGNAL(syncError()),
-            syncer, SLOT(finishSync()));
-
-    getMyStatus();
-
-    // Update participating groups
-    connection->updateGroupChats();
-
-    keepAliveTimer->start(MIN_INTERVAL);
-    keepAliveTimer->setSingleShot(true);
-
-    pendingMessagesTimer->start(CHECK_QUEUE_INTERVAL);
-    pendingMessagesTimer->setSingleShot(true);
-
-    qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (syncFreq == onConnect ||
-            (syncFreq == onceADay && (lastSync + 86400000U) < now) ||
-            (syncFreq == onceAWeek && (lastSync + 604800000U) < now) ||
-            (syncFreq == onceAMonth && (lastSync + 2419200000U) < now))
     {
         synchronizeContacts();
-        lastSync = now;
-        settings->setValue(SETTINGS_LAST_SYNC, lastSync);
-    }
 
-    // Set status if hasn't been set before
-    if (this->myStatus.isEmpty())
-        changeStatus(DEFAULT_STATUS);
-}
-
-void Client::loginFailed()
-{
-    Utilities::logData("connected(): There was a Login Exception: " + lastError);
-    isRegistered = false;
-    connectionClosed();
-}
-
-void Client::read()
-{
-    if (connectionStatus==Disconnected || connectionStatus==WaitingForConnection)
-        return;
-
-    connectionMutex.lock();
-    while (socket->bytesAvailable() > 0)
-    {
-        try {
-            connection->read();
-        }
-        catch (IOException &e)
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - lastGroupsRequest > GROUPS_REQUEST_INTERVAL)
         {
-            lastError = e.toString();
-            Utilities::logData("read(): There was an IO Exception: " + lastError);
-            connectionClosed();
-            showConnectionStatus(lastError + " Retrying in 10 seconds..");
-            break;
+            lastGroupsRequest = now;
+            connection->requestGroups();
         }
-        catch (ProtocolException &e)
-        {
-            lastError = e.toString();
-            Utilities::logData("read(): There was a Protocol Exception: " + lastError);
-            connectionClosed();
-            showConnectionStatus("Protocol Exception. Retrying in 10 seconds...");
-            break;
-        }
-    }
 
-    connectionMutex.unlock();
-}
+        connection->setAvailable(qApp->applicationState() == Qt::ApplicationActive);
 
-void Client::keepAlive()
-{
-    qint64 now = QDateTime::currentMSecsSinceEpoch();
-    qint64 timeElapsed = now - connection->getLastTreeReadTimestamp();
-
-    if (timeElapsed >= MIN_INTERVAL)
-    {
-        // If we need a resync we'd do that instead of sending a ping
-        if ((syncFreq == onceADay && (lastSync + 86400000U) < now) ||
-            (syncFreq == onceAWeek && (lastSync + 604800000U) < now) ||
-            (syncFreq == onceAMonth && (lastSync + 2419200000U) < now))
-        {
-            synchronizeContacts();
-            lastSync = now;
-            settings->setValue(SETTINGS_LAST_SYNC, lastSync);
-        }
-        else
-            // connection->sendNop();
-            connection->sendPing();
-
-        keepAliveTimer->start(MIN_INTERVAL);
-    }
-    else
-    {
-        keepAliveTimer->start(MIN_INTERVAL - timeElapsed);
-    }
-
-    // Write counters to disk if more than 24 hours have passed
-    if ((lastCountersWrite + 86400000U) < now)
-    {
-        dataCounters.writeCounters();
-        lastCountersWrite = now;
-    }
-}
-
-void Client::sendMessagesInQueue()
-{
-    if (connectionStatus == LoggedIn)
-    {
-
-        while (!pendingMessagesQueue.isEmpty())
-        {
-            pendingMessagesMutex.lock();
-            FMessage message = pendingMessagesQueue.dequeue();
-            pendingMessagesMutex.unlock();
-
-            // What if connection is not "connected" ?
-            // maybe a timer and recall this function?
-            // or a sleep?
-
+        // Send what could not be sent before
+        QList<FMessage> pending = pendingMessages.values();
+        pendingMessages.clear();
+        foreach (FMessage message, pending)
             connection->sendMessage(message);
-        }
 
-        // If we are not logged in the timer will be restarted
-        // in the next login
-        pendingMessagesTimer->start(CHECK_QUEUE_INTERVAL);
+        mainWin->connectionReady();
     }
-}
-
-void Client::sendSetGroupSubject(QString gjid, QString subject)
-{
-    if (connectionStatus == LoggedIn)
+    else if (connectionStatus == Registering)
     {
-        Group &g = roster->getGroup(gjid);
-        roster->updateSubject(&g);
-
-        connection->sendSetGroupSubject(gjid,subject);
+        mainWin->showLinkWindow();
     }
-
-}
-
-void Client::requestLeaveGroup(QString gjid)
-{
-    if (connectionStatus == LoggedIn)
-        connection->sendLeaveGroup(gjid);
-}
-
-void Client::requestQueryLastOnline(QString jid)
-{
-    if (connectionStatus == LoggedIn)
-        connection->sendQueryLastOnline(jid);
-}
-
-void Client::queueMessage(FMessage message)
-{
-    pendingMessagesMutex.lock();
-    pendingMessagesQueue.enqueue(message);
-    pendingMessagesMutex.unlock();
-
-    // EMIT SIGNAL THAT THERE'S SOMETHING IN THE QUEUE HERE
-    // OR CREATE A NEW QUEUE CLASS
-    // DON'T USE TIMERS <-- good idea I think.
-}
-
-void Client::ShowWindow()
-{
-    mainWin->show();
-    mainWin->activateWindow();
-}
-
-bool Client::isRunning()
-{
-    return true;
 }
 
 QString Client::parseConnectionStatus()
 {
-    QString status;
-
     switch(connectionStatus)
     {
         case WaitingForConnection:
-            status = "Waiting for connection";
-            break;
+            return "Waiting for connection";
 
         case Connecting:
-            status = "Connecting";
-            break;
-
-        case Connected:
-            status = "Connected";
-            break;
+            return "Connecting";
 
         case LoggedIn:
-            status = "Logged In";
-            break;
+            return "Connected";
 
-        case LoginFailure:
-            status = "Login Failed";
-            break;
-
-        case Disconnected:
-            status = "Disconnected";
-            break;
-
-        case RegistrationFailed:
-            status = "Registration Failed";
-            break;
+        case Registering:
+            return "Not linked to WhatsApp";
 
         default:
-            status = FULL_VERSION;
-            break;
+            return FULL_VERSION;
     }
-
-    return status;
-}
-
-void Client::sendGetConnectionStatus()
-{
-    QString status = parseConnectionStatus();
-
-    showConnectionStatus(status);
-    applet->status(status);
 }
 
 void Client::showConnectionStatus(QString status)
@@ -1321,457 +353,335 @@ void Client::showConnectionStatus(QString status)
     bar->showMessage(status);
 }
 
-void Client::userStatusUpdated(FMessage message)
+void Client::applicationStateChanged(Qt::ApplicationState state)
 {
-    QString status = QString::fromUtf8(message.data.constData());
+    // WhatsApp only reports typing and presence while we are "available"
+    connection->setAvailable(state == Qt::ApplicationActive);
+}
 
+/** ***********************************************************************
+ ** Messages
+ **/
 
-    if (message.key.remote_jid == "s.us")
+void Client::queueMessage(FMessage message)
+{
+    if (message.type == FMessage::BodyMessage || message.type == FMessage::MediaMessage)
     {
-        Contact &c = roster->getContact(myJid);
-        c.status = status;
-        roster->updateStatus(&c);
+        sentMessages.insert(message.key.id, message);
 
-        // Keep legacy status
-        Utilities::logData("User status confirmed: " + status);
-        settings->setValue(SETTINGS_STATUS,status);
-        this->myStatus = status;
+        if (connectionStatus != LoggedIn)
+        {
+            pendingMessages.insert(message.key.id, message);
+            return;
+        }
+    }
+
+    connection->sendMessage(message);
+}
+
+void Client::receiptReceived(QString chat, QString sender, QStringList ids,
+                             QString type, qint64 timestamp)
+{
+    Q_UNUSED(sender);
+    Q_UNUSED(timestamp);
+
+    bool group = chat.endsWith("@" GROUP_DOMAIN);
+    FMessage::Status status;
+    bool fromMe = true;
+
+    if (type == "server")
+        status = FMessage::ReceivedByServer;
+    else if (type == "delivered")
+        status = FMessage::ReceivedByTarget;
+    else if (type == "read")
+        status = (blueChecks || group) ? FMessage::ReadByTarget : FMessage::ReceivedByTarget;
+    else if (type == "played")
+        status = FMessage::Played;
+    else if (type == "read-self" || type == "played-self")
+    {
+        // Read on another device of ours
+        status = FMessage::ReceivedByTarget;
+        fromMe = false;
+    }
+    else if (type == "error")
+    {
+        // Not sent: try again with the next connection
+        foreach (QString id, ids)
+            if (sentMessages.contains(id))
+                pendingMessages.insert(id, sentMessages.value(id));
+        Utilities::logData("Sending failed for " + ids.join(" "));
+        return;
     }
     else
-    {
-        int index = message.key.remote_jid.indexOf('@');
-        if (index > 0)
-        {
-            QString jid = message.key.remote_jid.left(index + 1) + "s.whatsapp.net";
-            Contact &c = roster->getContact(jid);
-            c.status = QString::fromUtf8(message.data);
-            message.key.remote_jid = jid;
-            roster->updateStatus(&c);
+        return;
 
-            if(jid==myJid) {
-                settings->setValue(SETTINGS_STATUS,status);
-                this->myStatus=status;
+    foreach (QString id, ids)
+    {
+        if (status == FMessage::ReceivedByServer)
+            sentMessages.remove(id);
+
+        FMessage msg(chat, fromMe, id);
+        msg.status = status;
+        msg.type = FMessage::UndefinedMessage;
+        mainWin->messageStatusUpdate(msg);
+    }
+
+    if (!fromMe)
+        mainWin->readElsewhere(chat);
+}
+
+void Client::messageReceived(FMessage message)
+{
+    // Preview pictures for images, videos and documents
+    if (message.type == FMessage::MediaMessage &&
+        (message.media_wa_type == FMessage::Image ||
+         message.media_wa_type == FMessage::Video ||
+         message.media_wa_type == FMessage::Document))
+        connection->requestThumbnail(message);
+
+    // Unknown group: ask for the group names
+    QString chat = message.key.remote_jid;
+    if (chat.endsWith("@" GROUP_DOMAIN) &&
+        (!roster->isContactInRoster(chat) || roster->getGroup(chat).name.isEmpty()))
+    {
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - lastGroupsRequest > GROUPS_REQUEST_INTERVAL)
+        {
+            lastGroupsRequest = now;
+            connection->requestGroups();
+        }
+    }
+
+    mainWin->messageReceived(message);
+}
+
+void Client::historyReceived(FMessage message)
+{
+    historyQueue[message.key.remote_jid].append(message);
+
+    // Store them in batches: right after linking there can be thousands
+    if (!historyTimer.isActive())
+        historyTimer.start(500);
+}
+
+void Client::processHistory()
+{
+    QStringList chats = historyQueue.keys();
+
+    foreach (QString jid, chats)
+    {
+        QList<FMessage> list = historyQueue.take(jid);
+
+        // Remember push names of people we have no name for
+        QList<Contact *> changed;
+        foreach (FMessage msg, list)
+        {
+            QString from = msg.remote_resource.isEmpty() ? msg.key.remote_jid : msg.remote_resource;
+            if (msg.key.from_me || msg.notify_name.isEmpty() || from.endsWith("@" GROUP_DOMAIN))
+                continue;
+
+            Contact &c = roster->getContact(from);
+            if (c.alias != msg.notify_name && !changed.contains(&c))
+            {
+                c.alias = msg.notify_name;
+                if (c.name.isEmpty() || !c.fromAddressBook)
+                    c.name = c.alias;
+                changed.append(&c);
             }
-            mainWin->statusChanged(message);
         }
+
+        // Names as in live messages (address book name unless nicknames are wanted)
+        for (int i = 0; i < list.size(); i++)
+        {
+            FMessage &msg = list[i];
+            QString from = msg.remote_resource.isEmpty() ? msg.key.remote_jid : msg.remote_resource;
+            if (msg.key.from_me || !roster->isContactInRoster(from))
+                continue;
+
+            Contact &c = roster->getContact(from);
+            msg.notify_name = ((showNicknames || !c.fromAddressBook) && !c.alias.isEmpty())
+                              ? c.alias : c.name;
+        }
+        if (!changed.isEmpty())
+            roster->updateContacts(changed);
+
+        ChatLogger logger;
+        logger.init(jid);
+        int count = logger.logMessages(list);
+
+        Utilities::logData("History: " + QString::number(count) + " messages for " + jid);
+
+        if (count > 0)
+            mainWin->historyLogged(jid);
+
+        foreach (FMessage msg, list)
+            if (msg.type == FMessage::MediaMessage &&
+                (msg.media_wa_type == FMessage::Image || msg.media_wa_type == FMessage::Video))
+                connection->requestThumbnail(msg);
     }
 }
 
-void Client::photoIdReceived(QString jid, QString alias, QString photoId)
+// Collects read receipts and sends them per chat and author
+void Client::sendMessageRead(FMessage message)
 {
-    Contact &c = roster->getContact(jid);
+    QString chat = message.key.remote_jid;
+    bool group = chat.endsWith("@" GROUP_DOMAIN);
 
-    if (c.photoId != photoId)
-    {
-        Utilities::logData("Contact " + jid + " has changed his profile photo");
+    if (message.key.from_me || (!group && !blueChecks))
+        return;
 
-        if (connectionStatus == LoggedIn)
-            connection->sendGetPhoto(jid, QString(), false);
-    }
-
-    if (!c.alias.isEmpty() && c.alias != alias)
-    {
-        Utilities::logData("Contact " + jid + " has updated his alias to " + alias);
-
-        c.alias = alias;
-        roster->updateAlias(&c);
-    }
+    connection->markRead(chat, group ? message.remote_resource : QString(),
+                         QStringList(message.key.id));
 }
 
-void Client::photoReceived(QString from, QByteArray data,
-                           QString photoId, bool largeFormat)
+void Client::subscribe(QString jid)
 {
-    Contact &c = roster->getContact(from);
+    connection->subscribePresence(jid);
+}
 
-    if (from == myJid)
-    {
-        c.photoId = photoId;
-        roster->updatePhoto(&c);
+/** ***********************************************************************
+ ** Contacts, groups and pictures
+ **/
 
-        Utilities::logData("Updated my picture photoId: " + c.photoId);
-    }
-    else if (!data.isEmpty())
+void Client::synchronizeContacts()
+{
+    connection->requestContacts();
+}
+
+void Client::contactsReceived(QList<QStringList> contacts)
+{
+    QList<Contact *> changed;
+
+    foreach (QStringList entry, contacts)
     {
-        if (!largeFormat)
+        QString jid = entry.value(0);
+        QString fullName = entry.value(1);
+        QString pushName = entry.value(2);
+
+        if (jid == myJid)
+            continue;
+
+        // Only people with a name: WhatsApp also lists everyone it ever saw
+        if (fullName.isEmpty() && !roster->isContactInRoster(jid))
+            continue;
+
+        Contact &c = roster->getContact(jid, false);
+        bool dirty = false;
+
+        if (!fullName.isEmpty() && (c.name != fullName || !c.fromAddressBook))
         {
-            c.photo = QImage::fromData(data).scaled(64, 64, Qt::KeepAspectRatio,
-                                                   Qt::SmoothTransformation);
-            c.photoId = photoId;
-
-            roster->updatePhoto(&c);
-
-            mainWin->updatePhoto(c);
-
-            Utilities::logData("Updated picture of " + from);
+            c.name = fullName;
+            c.fromAddressBook = true;
+            dirty = true;
         }
-        else
+
+        if (!pushName.isEmpty() && c.alias != pushName)
         {
-            mainWin->photoReceived(c, QImage::fromData(data), photoId);
+            c.alias = pushName;
+            if (c.name.isEmpty())
+                c.name = pushName;
+            dirty = true;
+        }
+
+        if (dirty)
+            changed.append(&c);
+    }
+
+    if (!changed.isEmpty())
+    {
+        roster->updateContacts(changed);
+        mainWin->contactsUpdated();
+    }
+
+    Utilities::logData("Contacts: " + QString::number(contacts.size()) + " received, " +
+                       QString::number(changed.size()) + " updated");
+}
+
+void Client::groupsReceived(QMap<QString,QString> groups)
+{
+    foreach (QString jid, groups.keys())
+    {
+        QString subject = groups.value(jid);
+        Group &g = roster->getGroup(jid);
+
+        if (g.name != subject && !subject.isEmpty())
+        {
+            g.name = subject;
+            roster->updateContact(&g);
+            mainWin->updateGroup(g, false);
         }
     }
 }
 
 void Client::updatePhoto(QString jid, QString expectedPhotoId, bool largeFormat)
 {
-    if (connectionStatus == LoggedIn)
-        connection->sendGetPhoto(jid, expectedPhotoId, largeFormat);
+    Q_UNUSED(expectedPhotoId);
+    Q_UNUSED(largeFormat);
+
+    if (connectionStatus == LoggedIn && !photoRequested.contains(jid))
+    {
+        photoRequested.insert(jid);
+        connection->requestProfilePicture(jid);
+    }
 }
 
-void Client::photoDeleted(QString jid, QString alias)
+void Client::profilePictureReceived(QString jid, QString path)
 {
+    if (path.isEmpty())
+        return;
+
+    QString photoId = QFileInfo(path).fileName();
     Contact &c = roster->getContact(jid);
 
-    if (c.photoId != "abook")
+    if (c.photoId != photoId || c.photo.isNull())
     {
-        if (c.type == Contact::TypeContact && jid != myJid)
-            roster->getPhotoFromAddressBook(&c);
-        else
-        {
-            c.photoId.clear();
-            c.photo = QImage();
-        }
-
-        roster->updatePhoto(&c);
-
-        if (jid != myJid)
-            mainWin->updatePhoto(c);
-
-        Utilities::logData("Deleted photo of contact " + c.jid);
-    }
-
-    if (!c.alias.isEmpty() && c.alias != alias)
-    {
-        Utilities::logData("Contact " + jid + " has updated his alias to " + alias);
-
-        c.alias = alias;
-        roster->updateAlias(&c);
-    }
-}
-
-void Client::statusChanged(QString jid, qint64 t, QString status)
-{
-    Contact &c = roster->getContact(jid);
-
-    if (c.statusTimestamp != t || jid==myJid)
-    {
-        c.status = status;
-        c.statusTimestamp = t;
-        roster->updateStatus(&c);
-        if(jid==myJid) {
-            settings->setValue(SETTINGS_STATUS,status);
-            this->myStatus=status;
-        }
-
-        mainWin->statusChanged(jid, status);
-    }
-}
-
-void Client::setPhoto(QString jid, QImage image)
-{
-    QByteArray data;
-    QByteArray thumbnail;
-
-    if (!image.isNull())
-    {
-        int quality = 80;
-        do
-        {
-            data.clear();
-            QBuffer out(&data);
-            out.open(QIODevice::WriteOnly);
-            image.save(&out, "JPEG", quality);
-            quality -= 10;
-        } while ((quality > 10) && data.size() > MAX_PROFILE_PICTURE_SIZE);
-
-        QImage thumb = image.scaled(100, 100, Qt::KeepAspectRatio,
-                                    Qt::SmoothTransformation);
-        quality = 80;
-        do
-        {
-            thumbnail.clear();
-            QBuffer out(&thumbnail);
-            out.open(QIODevice::WriteOnly);
-            thumb.save(&out, "JPEG", quality);
-            quality -= 10;
-        } while ((quality > 10) && thumbnail.size() > MAX_PROFILE_PICTURE_SIZE);
-    }
-
-    if (connectionStatus == LoggedIn)
-        connection->sendSetPhoto(jid, data, thumbnail);
-}
-
-void Client::requestPresenceSubscription(QString jid)
-{
-    if (connectionStatus == LoggedIn)
-        connection->sendPresenceSubscriptionRequest(jid);
-}
-
-void Client::requestPresenceUnsubscription(QString jid)
-{
-    if (connectionStatus == LoggedIn)
-        connection->sendUnsubscribeHim(jid);
-}
-
-void Client::createGroupChat(QImage photo, QString subject, QStringList participants)
-{
-    qint64 creation = QDateTime::currentMSecsSinceEpoch() / 1000;
-
-    Group *group = new Group();
-
-    group->subjectOwner = group->author = myJid;
-    group->creationTimestamp = group->subjectTimestamp = creation;
-    group->name = subject;
-    group->photo = photo;
-
-    group->participants = participants;
-
-    groups.insert(subject,group);
-
-    if (connectionStatus == LoggedIn)
-        connection->sendCreateGroupChat(subject, participants);
-}
-
-void Client::groupInfoFromList(QString id, QString from, QString author,
-                               QString newSubject, QString creation,
-                               QString subjectOwner, QString subjectTimestamp)
-{
-    Group *g;
-
-    if (groups.contains(newSubject))
-    {
-        Group *group = groups.value(newSubject);
-        QString creationStr = QString::number(group->creationTimestamp);
-
-        g = &(roster->getGroup(from, group->author, group->name,
-                              creationStr, group->subjectOwner, creationStr));
-
-        if (connectionStatus == LoggedIn)
-        {
-            connection->sendAddParticipants(from, group->participants);
-            if (!group->photo.isNull())
-                setPhoto(from,group->photo);
-        }
-
-        groups.remove(newSubject);
-        delete group;
-    }
-    else
-        g = &(roster->getGroup(from, author, newSubject,
-                               creation, subjectOwner, subjectTimestamp));
-
-    mainWin->updateGroup(*g, false);
-}
-
-void Client::groupNewSubject(QString from, QString author, QString authorName, QString newSubject, QString creation)
-{
-    Group &group = roster->getGroup(from);
-
-    group.name = newSubject;
-    group.subjectOwner = author;
-    group.subjectOwnerName = authorName;
-    group.subjectTimestamp = creation.toLongLong();
-
-    roster->updateSubject(&group);
-
-    mainWin->updateGroup(group, true);
-
-    if (group.author.isEmpty())
-        connection->updateGroupChats();
-}
-
-void Client::getParticipants(QString gjid)
-{
-    if (connectionStatus == LoggedIn)
-        connection->sendGetParticipants(gjid);
-}
-
-void Client::groupUser(QString gjid, QString jid)
-{
-    Group &group = roster->getGroup(gjid);
-
-    if (!group.containsParticipant(jid))
-    {
-        roster->addGroupParticipant(&group,jid);
-        mainWin->groupParticipant(gjid, jid);
-    }
-}
-
-void Client::createMyJidContact()
-{
-    Contact &contact = roster->getContact(myJid);
-
-    if (contact.name != "You")
-    {
-        contact.name = "You";
-        contact.alias = userName;
-        contact.status = myStatus;
-
-        QDir home = QDir::home();
-        QString fileName = home.path() + CACHE_DIR"/profilephoto.png";
-
-        if (home.exists(fileName))
-        {
-            QImage image(fileName);
-            contact.photo = image.scaled(QSize(64,64), Qt::KeepAspectRatio,
-                                         Qt::SmoothTransformation);
-
-            // This will force an update in the next synchronization
-            contact.photoId = "invalid";
-            roster->updatePhoto(&contact);
-        }
-
-        roster->updateContact(&contact);
-    }
-}
-
-void Client::sendAddGroupParticipant(QString gjid, QString jid)
-{
-    if (connectionStatus == LoggedIn)
-    {
-        QStringList participants;
-        participants.append(jid);
-        connection->sendAddParticipants(gjid, participants);
-    }
-}
-
-void Client::groupAddUser(QString gjid, QString jid)
-{
-    Group &group = roster->getGroup(gjid);
-
-    if (!group.containsParticipant(jid))
-    {
-        roster->addGroupParticipant(&group,jid);
-        mainWin->groupParticipant(gjid, jid);
-    }
-}
-
-void Client::groupRemoveUser(QString gjid, QString jid)
-{
-    Group &group = roster->getGroup(gjid);
-
-    if (group.containsParticipant(jid))
-    {
-        roster->removeGroupParticipant(&group,jid);
-        mainWin->removeParticipant(gjid, jid);
-    }
-}
-
-void Client::sendRemoveGroupParticipant(QString gjid, QString jid)
-{
-    if (connectionStatus == LoggedIn)
-    {
-        QStringList participants;
-        participants.append(jid);
-        connection->sendRemoveParticipants(gjid, participants);
-    }
-}
-
-void Client::sendPromoteGroupParticipant(QString gjid, QString jid)
-{
-    if (connectionStatus == LoggedIn)
-    {
-        QStringList participants;
-        participants.append(jid);
-        connection->sendPromoteParticipants(gjid, participants);
-    }
-}
-
-void Client::requestPrivacyList()
-{
-    if (connectionStatus == LoggedIn)
-        connection->sendGetPrivacyList();
-}
-
-void Client::setPrivacyList()
-{
-    QStringList list = roster->getBlockedJidsList().keys();
-    Utilities::logData("Blocked people count: " + QString::number(list.size()));
-    connection->sendSetPrivacyBlockedList(list);
-}
-
-void Client::blockOrUnblockContact(QString jid, bool blocked)
-{
-    Contact &c = roster->getContact(jid);
-    c.blocked = blocked;
-    roster->updateBlock(&c);
-    setPrivacyList();
-}
-
-void Client::privacyListReceived(QStringList list)
-{
-    // Synchronize privacy list
-
-    ContactList blockedList = roster->getBlockedJidsList();
-    ContactList serverList;
-
-    foreach(QString jid, list)
-    {
-        Contact &c = roster->getContact(jid);
-        serverList.insert(jid,&c);
-    }
-
-    // Remove entries that are in both
-    foreach (QString jid, serverList.keys())
-        if (blockedList.contains(jid))
-        {
-            serverList.remove(jid);
-            blockedList.remove(jid);
-        }
-
-    // Block people locally that are blocked in servers
-
-    foreach (QString jid, serverList.keys())
-    {
-        Contact *c = serverList.value(jid);
-        c->blocked = true;
-        roster->updateBlock(c);
-    }
-
-    // Block people in servers that are blocked locally
-    if (blockedList.size() > 0)
-        setPrivacyList();
-
-    mainWin->refreshPrivacyList();
-}
-
-void Client::sendVoiceNotePlayed(FMessage message)
-{
-    if (connectionStatus == LoggedIn)
-        connection->sendVoiceNotePlayed(message);
-}
-
-void Client::sendMessageRead(FMessage message)
-{
-    if (connectionStatus == LoggedIn)
-        connection->sendMessageRead(message);
-}
-
-void Client::updateLastDir(int waType, QString dir)
-{
-    switch (waType)
-    {
-        case -1:
-            lastProfileDir = dir;
-            settings->setValue(SETTINGS_LAST_PROFILE_DIR,lastProfileDir);
-            break;
-
-        case FMessage::Video:
-            lastVideoDir = dir;
-            settings->setValue(SETTINGS_LAST_VIDEO_DIR,lastVideoDir);
-            break;
-
-        case FMessage::Audio:
-            lastAudioDir = dir;
-            settings->setValue(SETTINGS_LAST_AUDIO_DIR,lastAudioDir);
-            break;
-
-        case FMessage::Image:
-            lastImageDir = dir;
-            settings->setValue(SETTINGS_LAST_IMAGE_DIR,lastImageDir);
-            break;
-
-        default:
+        QImage image(path);
+        if (image.isNull())
             return;
 
+        c.photo = image.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        c.photoId = photoId;
+        roster->updatePhoto(&c);
+        mainWin->updatePhoto(c);
     }
+}
+
+QString Client::authorName(const FMessage &message)
+{
+    if (message.key.from_me)
+        return "You";
+
+    if (!message.notify_name.isEmpty())
+        return message.notify_name;
+
+    QString jid = message.remote_resource.isEmpty() ? message.key.remote_jid
+                                                    : message.remote_resource;
+
+    if (roster && roster->isContactInRoster(jid))
+    {
+        Contact &c = roster->getContact(jid);
+        if (!c.name.isEmpty())
+            return c.name;
+    }
+
+    return "+" + jid.left(jid.indexOf('@'));
+}
+
+/** ***********************************************************************
+ ** D-Bus interface org.yappari.Yappari
+ **/
+
+void Client::ShowWindow()
+{
+    mainWin->show();
+    mainWin->raise();
+    mainWin->activateWindow();
+
+    if (connectionStatus == Registering)
+        mainWin->showLinkWindow();
+}
+
+bool Client::isRunning()
+{
+    return true;
 }

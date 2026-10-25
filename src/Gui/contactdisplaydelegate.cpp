@@ -31,9 +31,16 @@
 
 #include "contactdisplaydelegate.h"
 
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
 #define TEXT_WIDTH      510
+
+// Width of the text: the row without the picture on the right
+static int textWidth(const QStyleOptionViewItem& option)
+{
+    int width = option.widget ? option.widget->width() : option.rect.width();
+    return (width > 200) ? width - 90 : TEXT_WIDTH;
+}
 
 ContactDisplayDelegate::ContactDisplayDelegate(QObject *parent) :
     QStyledItemDelegate(parent)
@@ -50,7 +57,7 @@ void ContactDisplayDelegate::paint (QPainter * painter, const QStyleOptionViewIt
     QString html = index.data(Qt::DisplayRole).toString();
     QImage photo = index.data(Qt::UserRole).value<QImage>();
 
-    QStyleOptionViewItemV4 options = option;
+    QStyleOptionViewItem options = option;
     initStyleOption(&options, index);
 
     painter->save();
@@ -58,9 +65,7 @@ void ContactDisplayDelegate::paint (QPainter * painter, const QStyleOptionViewIt
     QTextDocument doc;
     doc.setHtml(html);
 
-    // UGLY HACK BUT COULDN'T FIND ANOTHER WAY
-    doc.setTextWidth(TEXT_WIDTH);
-    // doc.adjustSize();
+    doc.setTextWidth(textWidth(option));
 
     options.text = "";
     options.widget->style()->drawControl(QStyle::CE_ItemViewItem, &options, painter);
@@ -68,7 +73,15 @@ void ContactDisplayDelegate::paint (QPainter * painter, const QStyleOptionViewIt
     painter->translate(options.rect.left(), options.rect.top() + 5);
     QRect clip(0, 0, options.rect.width()-70, options.rect.height() - 5);
 
-    doc.drawContents(painter, clip);
+    // Text in the colours of the theme (QTextDocument defaults to black)
+    QAbstractTextDocumentLayout::PaintContext context;
+    context.palette = option.palette;
+    context.palette.setColor(QPalette::Text, option.palette.color(
+        (option.state & QStyle::State_Selected) ? QPalette::HighlightedText : QPalette::Text));
+    context.clip = clip;
+    painter->setClipRect(clip);
+    doc.documentLayout()->draw(painter, context);
+    painter->setClipping(false);
 
     QRect imageClip(options.rect.width()-70, 0, 64, 64);
 
@@ -93,10 +106,7 @@ QSize ContactDisplayDelegate::sizeHint(const QStyleOptionViewItem& option,
 
     doc.setHtml(html);
 
-    // UGLY HACK BUT COULDN'T FIND ANOTHER WAY
-    doc.setTextWidth(TEXT_WIDTH);
-    //doc.setTextWidth(option.rect.width());
-    // doc.adjustSize();
+    doc.setTextWidth(textWidth(option));
 
     QSize size = doc.size().toSize();
     size.setHeight(size.height()+20);

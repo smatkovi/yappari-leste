@@ -34,10 +34,10 @@
 
 #include "chatdisplayitem.h"
 
-#include "Whatsapp/util/utilities.h"
-#include "Whatsapp/util/datetimeutilities.h"
+#include "util/utilities.h"
+#include "util/datetimeutilities.h"
 
-#define TEXT_WIDTH      700
+#define TEXT_WIDTH      800
 
 ChatDisplayItem::ChatDisplayItem(Contact *c) :
     QStandardItem()
@@ -58,7 +58,7 @@ ChatDisplayItem::ChatDisplayItem(Contact *c) :
 
 void ChatDisplayItem::updatePhoto(Contact *c)
 {
-    if (c->photoId.isEmpty())
+    if (c->photo.isNull())
     {
         if (c->type == Contact::TypeGroup)
             setData(QImage("/usr/share/yappari/icons/64x64/general_conference_avatar.png"), Qt::UserRole);
@@ -98,7 +98,11 @@ void ChatDisplayItem::updateData()
         else if (lastMessage.type == FMessage::MediaMessage && lastMessage.live)
             lastLine = "<i>[voice note]</i>";
         else
+        {
             lastLine = "<i>[" + lastMessage.getMediaWAType() + "]</i>";
+            if (!lastMessage.media_caption.isEmpty())
+                lastLine += " " + lastMessage.media_caption.toHtmlEscaped();
+        }
 
     }
 
@@ -123,7 +127,8 @@ void ChatDisplayItem::updateData()
 
     } while (lastLine.length() > 0 && height > lineHeight);
 
-    QString timeString = (DateTimeUtilities::isSameDate(lastMessage.timestamp,QDateTime::currentMSecsSinceEpoch()))
+    QString timeString = (lastMessage.type == FMessage::UndefinedMessage) ? QString() :
+                         (DateTimeUtilities::isSameDate(lastMessage.timestamp,QDateTime::currentMSecsSinceEpoch()))
             ? DateTimeUtilities::shortTimeFormat(lastMessage.timestamp)
             : DateTimeUtilities::shortDayFormat(lastMessage.timestamp);
 
@@ -135,8 +140,12 @@ void ChatDisplayItem::updateData()
                    + "</div>"
                    "</td></tr></table>";
 
+    QString name = contact->name;
+    if (name.isEmpty())
+        name = (contact->type == Contact::TypeGroup) ? QString("Group") : contact->phone;
+
     QString html = "<table width=\"100%\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\"><tr><td>" +
-                   Utilities::WATextToHtml(contact->name, 32) +
+                   Utilities::WATextToHtml(name, 32, false) +
                    "</td><td align=\"right\"><div style=\"font-size:18px;color:" +
                    color.name() + "\">" +
                    timeString +

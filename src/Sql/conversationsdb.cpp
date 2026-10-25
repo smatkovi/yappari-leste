@@ -27,6 +27,7 @@
  */
 
 #include <QDir>
+#include <QDateTime>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QVariant>
@@ -35,7 +36,7 @@
 #include "conversationsdb.h"
 #include "globalconstants.h"
 
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
 #define DB_FILENAME "chats.db"
 #define DB_VERSION  1
@@ -43,8 +44,7 @@
 ConversationsDB::ConversationsDB(QObject *parent):
     QObject(parent)
 {
-    QDir home = QDir::home();
-    QFile file(home.path() + HOME_DIR + DB_FILENAME);
+    QFile file(Utilities::dataDir() + "/" DB_FILENAME);
 
     bool dbAvailable = file.exists();
 

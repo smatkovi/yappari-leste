@@ -30,6 +30,9 @@
 
 Group::Group() : Contact()
 {
+    type = TypeGroup;
+    creationTimestamp = 0;
+    subjectTimestamp = 0;
 }
 
 bool Group::addParticipant(QString jid)

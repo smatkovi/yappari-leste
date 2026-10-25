@@ -32,7 +32,7 @@
 
 #include "contactdisplayitem.h"
 
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
 #include "client.h"
 
@@ -46,7 +46,7 @@ ContactDisplayItem::ContactDisplayItem(Contact *c) :
             : contact->alias;
 
     QString status = (c->type == Contact::TypeGroup)
-                            ? QString() : c->status.replace("<","&lt;").replace(">","&gt;");
+                            ? QString() : c->status.toHtmlEscaped();
 
     QString html = "<table width=\"100%\"><tr><td>" +
                    Utilities::WATextToHtml(name,32) + "</td>"
@@ -70,6 +70,7 @@ ContactDisplayItem::ContactDisplayItem(Contact *c) :
 
     setData(html,Qt::DisplayRole);
     setData(c->jid,Qt::UserRole + 1);
+    setData(name + " " + c->phone,Qt::UserRole + 3);
 
     if (c->photoId.isEmpty())
         setData(QImage("/usr/share/icons/hicolor/64x64/hildon/general_default_avatar.png"), Qt::UserRole);

@@ -34,8 +34,8 @@
 
 #include "chattextitem.h"
 
-#include "Whatsapp/util/datetimeutilities.h"
-#include "Whatsapp/util/utilities.h"
+#include "util/datetimeutilities.h"
+#include "util/utilities.h"
 
 #include "globalconstants.h"
 #include "client.h"
@@ -60,6 +60,15 @@ void ChatTextItem::setMessage(FMessage message)
     setText(createHTML());
 }
 
+void ChatTextItem::setStatus(int status)
+{
+    if (status > message.status || !message.key.from_me)
+    {
+        message.status = (FMessage::Status) status;
+        setText(createHTML());
+    }
+}
+
 void ChatTextItem::updateTimestamp()
 {
     setText(createHTML());
@@ -79,9 +88,7 @@ QString ChatTextItem::createHTML()
 
     QString time = DateTimeUtilities::shortTimeFormat(message.timestamp);
 
-    QString from = (from_me)
-            ? "You"
-            : message.notify_name;
+    QString from = Client::authorName(message);
 
     QColor color = QMaemo5Style::standardColor("ActiveTextColor");
 
@@ -125,7 +132,7 @@ QString ChatTextItem::createHTML()
             html.append(CHECK);
         else if (message.status == FMessage::ReceivedByTarget)
            html.append(DOUBLECHECK);
-        else if (message.status == FMessage::ReadByTarget)
+        else if (message.status == FMessage::ReadByTarget || message.status == FMessage::Played)
            html.append(DOUBLEBLUECHECK);
         else
            html.append(GRAYCHECK);
@@ -136,47 +143,7 @@ QString ChatTextItem::createHTML()
                 "<div style=\"font-size:5px\">&nbsp;</div>");
 
 
-/*
-    // QTextLayout testing
-    QString text = Utilities::formatMessage(QString::fromUtf8(message.data),32);
-    QTextDocument doc;
-    QTextOption option;
-    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-    doc.setDefaultTextOption(option);
-    doc.setUseDesignMetrics(true);
-    doc.setHtml(text);
-    doc.setTextWidth(543);
-    QTextBlock block = doc.begin();
-    Utilities::logData("========== DOCUMENT ==========\n" +
-                       text + "\n" +
-                       "Width: " + QString::number(doc.textWidth()) + "\n"
-                       "Line Count: " + QString::number(doc.lineCount()) + "\n"
-                       "Line Count: " + QString::number(block.lineCount()) + "\n");
 
-
-    QTextLayout layout(text);
-    QTextOption option;
-    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-    layout.setTextOption(option);
-    layout.beginLayout();
-    while (1)
-    {
-        QTextLine line = layout.createLine();
-        if (!line.isValid())
-            break;
-
-        line.setLineWidth(543);
-        Utilities::logData(text.mid(line.textStart(),line.textLength()) + "\n");
-    }
-    layout.endLayout();
-
-    Utilities::logData("==== LAYOUT =====\n" +
-                       QString::fromUtf8(message.data) + "\n-----------------\n"
-                       "Maximum Width: " + QString::number(layout.maximumWidth()) + "\n"
-                       "Minimum Width: " + QString::number(layout.minimumWidth()) + "\n"
-                       "Line Count: " + QString::number(layout.lineCount()) + "\n"
-                       "---------------\n" + layout.text());
-*/
 
     return html;
 }

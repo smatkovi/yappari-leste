@@ -1,1 +1,8 @@
 backend/yappari-wa
+# qmake build output
+src/Makefile
+src/.qmake.stash
+src/*.o
+src/moc_*
+src/ui_*.h
+src/yappari

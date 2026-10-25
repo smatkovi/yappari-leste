@@ -32,15 +32,11 @@
 #include <QTextEdit>
 #include <QTimer>
 
-#include "selectemojiwidget.h"
-
 class ChatTextEdit : public QTextEdit
 {
     Q_OBJECT
 public:
     explicit ChatTextEdit(QWidget *parent = 0);
-
-    void setMainWindow(QWidget *mainWindow);
 
 signals:
     void returnPressed();
@@ -48,22 +44,14 @@ signals:
     void composing();
 
 public slots:
-    void addEmoji(QString path);
     void textChanged();
     void verifyPaused();
-    void closeKB();
-    void selectEmojiButtonClicked();
-    void openEmojiWidget();
-    void closeEmojiWidget();
 
 private:
     int fontHeight;
     bool isComposing;
-    bool isEmojiWidgetOpen;
-    SelectEmojiWidget *emojiWidget;
     quint64 lastKeyPressed;
     QTimer composingTimer;
-    QWidget *mainWindow;
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event);

@@ -29,7 +29,6 @@
 #ifndef GLOBALSETTINGSDIALOG_H
 #define GLOBALSETTINGSDIALOG_H
 
-#include <QMaemo5ListPickSelector>
 #include <QDialog>
 
 namespace Ui {
@@ -44,27 +43,15 @@ public:
     explicit GlobalSettingsDialog(QWidget *parent = 0);
     ~GlobalSettingsDialog();
 
-    quint16 getPort();
-    QString getSync();
     bool getShowNicknames();
     bool getShowNumbers();
     bool getPopupOnFirstMessage();
     bool getBlueChecks();
-    bool getImportMediaToGallery();
     int getAutomaticDownloadBytes();
-    int getSyncFrequency();
-    bool getStartOnBoot();
     bool getEnterIsSend();
-    QString getVoiceCodec();
-    bool getAutoCloseEmoji();
 
 private:
     Ui::GlobalSettingsDialog *ui;
-
-    QMaemo5ListPickSelector *portSelector;
-    QMaemo5ListPickSelector *syncSelector;
-    QMaemo5ListPickSelector *syncFreqSelector;
-    QMaemo5ListPickSelector *voiceCodecSelector;
 };
 
 #endif // GLOBALSETTINGSDIALOG_H

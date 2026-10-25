@@ -39,14 +39,14 @@ public Q_SLOTS: // METHODS
     inline QDBusPendingReply<int> PlayEvent(const QVariantMap &hints, const QString &notification_sender)
     {
         QList<QVariant> argumentList;
-        argumentList << qVariantFromValue(hints) << qVariantFromValue(notification_sender);
+        argumentList << QVariant::fromValue(hints) << QVariant::fromValue(notification_sender);
         return asyncCallWithArgumentList(QLatin1String("PlayEvent"), argumentList);
     }
 
     inline QDBusPendingReply<> StopEvent(int id)
     {
         QList<QVariant> argumentList;
-        argumentList << qVariantFromValue(id);
+        argumentList << QVariant::fromValue(id);
         return asyncCallWithArgumentList(QLatin1String("StopEvent"), argumentList);
     }
 

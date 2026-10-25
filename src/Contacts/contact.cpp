@@ -28,7 +28,6 @@
 
 #include "contact.h"
 
-#include "Whatsapp/util/utilities.h"
 
 Contact::Contact()
 {
@@ -37,6 +36,9 @@ Contact::Contact()
     lastSeen = 0;
     blocked = false;
     type = TypeContact;
+    fromAddressBook = false;
+    statusTimestamp = 0;
+    typingStatus = Idle;
 
 }
 

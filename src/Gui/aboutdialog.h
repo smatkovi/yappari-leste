@@ -45,9 +45,6 @@ public:
 
 private:
     Ui::AboutDialog *ui;
-
-public slots:
-    void donateAction();
 };
 
 #endif // ABOUTDIALOG_H

@@ -26,7 +26,9 @@
  * official policies, either expressed or implied, of the copyright holder.
  */
 
+
 #include <QDir>
+#include <QDateTime>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QVariant>
@@ -35,9 +37,9 @@
 #include "globalconstants.h"
 #include "chatlogger.h"
 
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
-#define MAX_MESSAGES               7
+#define MAX_MESSAGES              20
 #define LOG_VERSION                7
 #define LOG_EXTENSION              ".dblog"
 
@@ -75,13 +77,24 @@
 ChatLogger::ChatLogger(QObject *parent):
     QObject(parent)
 {
+    oldestTimestamp = -1;
+    oldestId = -1;
 }
 
 
 ChatLogger::~ChatLogger()
 {
     db.close();
-    QSqlDatabase::removeDatabase(jid);
+    db = QSqlDatabase();
+    QSqlDatabase::removeDatabase(connectionName);
+}
+
+QString ChatLogger::fileName(QString jid)
+{
+    QString dir = Utilities::dataDir() + LOGS_DIR;
+    QDir().mkpath(dir);
+
+    return dir + jid.left(jid.indexOf("@")) + LOG_EXTENSION;
 }
 
 bool ChatLogger::init(QString jid)
@@ -89,13 +102,20 @@ bool ChatLogger::init(QString jid)
     Utilities::logData("Initializing logger for " + jid);
     this->jid = jid;
 
-    QDir home = QDir::home();
-    QFile file(home.path() + LOGS_DIR + jid.left(jid.indexOf("@")) + LOG_EXTENSION);
+    QFile file(fileName(jid));
 
     bool logAvailable = file.exists();
 
     // Initialization of databases
-    db = QSqlDatabase::addDatabase("QSQLITE",jid);
+    // One connection per logger: several loggers may use the same chat
+    if (!connectionName.isEmpty())
+    {
+        db.close();
+        db = QSqlDatabase();
+        QSqlDatabase::removeDatabase(connectionName);
+    }
+    connectionName = jid + "/" + QString::number((quintptr) this, 16);
+    db = QSqlDatabase::addDatabase("QSQLITE",connectionName);
 
     db.setDatabaseName(file.fileName());
 
@@ -149,7 +169,6 @@ bool ChatLogger::init(QString jid)
                    QString::number(LOG_VERSION) + ")");
 
         query.exec("END TRANSACTION");
-        lastId = -1;
     }
     else
     {
@@ -252,24 +271,38 @@ bool ChatLogger::init(QString jid)
                         QString::number(LOG_VERSION));
             query.exec("END TRANSACTION");
         }
-
-        query.exec("select max(localid) from log");
-        query.next();
-        lastId = query.value(0).toInt() + 1;
     }
 
+    QSqlQuery query(db);
+    query.exec("create index if not exists log_id_idx on log(id)");
+    query.exec("create index if not exists log_timestamp_idx on log(timestamp)");
 
-    Utilities::logData("Logger for " + jid +
-                       " initialized successfully.  LastId: "
-                       + QString::number(lastId));
+    oldestTimestamp = -1;
+    oldestId = -1;
+
+    Utilities::logData("Logger for " + jid + " initialized successfully.");
     return true;
 }
 
-void ChatLogger::logMessage(FMessage message)
+bool ChatLogger::contains(QString id)
 {
     QSqlQuery query(db);
 
-    query.exec("BEGIN TRANSACTION");
+    query.prepare("select 1 from log where id=:id");
+    query.bindValue(":id",id);
+    query.exec();
+
+    return query.next();
+}
+
+// Stores a message unless one with the same id is logged already
+bool ChatLogger::insert(FMessage &message)
+{
+    if (contains(message.key.id))
+        return false;
+
+    QSqlQuery query(db);
+
     query.prepare("insert into log (name, from_me, timestamp, "
                   "id, type, data, thumb_image, status, "
                   "media_url, media_mime_type, media_wa_type, media_size, "
@@ -309,34 +342,50 @@ void ChatLogger::logMessage(FMessage message)
     query.bindValue(":live", message.live);
     query.bindValue(":latitude", message.latitude);
     query.bindValue(":longitude", message.longitude);
-    query.bindValue(":media_caption", message.media_caption);	
+    query.bindValue(":media_caption", message.media_caption);
 
     query.bindValue(":msg_count", message.count);
     query.bindValue(":msg_delivered", message.delivered);
     query.bindValue(":msg_read", message.read);
 
     query.bindValue(":remote_resource", message.remote_resource);
-    query.exec();
 
-    query.exec("select max(localid) from log");
-    query.next();
-    int log_id = query.value(0).toInt();
-
-    Utilities::logData("logMessage(): " + query.lastError().text());
-
-    for(int i=0; i<message.receipts.size(); i++)
+    if (!query.exec())
     {
-        Utilities::logData("INSERTING receipt");
-        query.prepare("insert into receipt (message_id, participant, type, timestamp) "
-                      "values(:message_id, :participant, :type, :timestamp)");
-        query.bindValue(":message_id,", log_id);
-        query.bindValue(":participant", message.receipts.at(i).remote_jid);
-        query.bindValue(":type", message.receipts.at(i).type);
-        query.bindValue(":timestamp", message.receipts.at(i).timestamp);
-        query.exec();
+        Utilities::logData("logMessage(): " + query.lastError().text());
+        return false;
     }
 
+    return true;
+}
+
+bool ChatLogger::logMessage(FMessage message)
+{
+    QSqlQuery query(db);
+
+    query.exec("BEGIN TRANSACTION");
+    bool result = insert(message);
     query.exec("END TRANSACTION");
+
+    return result;
+}
+
+// Stores several messages in one transaction, returns how many were new
+int ChatLogger::logMessages(QList<FMessage> messages)
+{
+    QSqlQuery query(db);
+    int count = 0;
+
+    query.exec("BEGIN TRANSACTION");
+    for (int i = 0; i < messages.size(); i++)
+    {
+        FMessage message = messages.at(i);
+        if (insert(message))
+            count++;
+    }
+    query.exec("END TRANSACTION");
+
+    return count;
 }
 
 int ChatLogger::getMessageReceipts(QSqlQuery& query, FMessage &msg)
@@ -398,30 +447,32 @@ FMessage ChatLogger::sqlQueryResultToFMessage(QString jid,QSqlQuery& query)
     else
         msg.setData(query.value(LOG_DATA).toString());
 
-    int localid = query.value(LOG_LOCALID).toInt();
-
-
     return msg;
 }
 
+// Returns the next older batch of messages, newest first
 QList<FMessage> ChatLogger::lastMessages()
 {
     QList<FMessage> list;
 
-    // Exit if there are no more log to read
-    if (lastId <= 1)
-        return list;
-
-    qint64 startTime = QDateTime::currentDateTime().toMSecsSinceEpoch();
-    Utilities::logData("Reading log for " + jid + "...");
-
     QSqlQuery query(db);
 
-    query.prepare("select * from log "
-                  "where localid < :lastid "
-                  "order by localid desc limit :limit");
+    if (oldestTimestamp < 0)
+    {
+        query.prepare("select * from log "
+                      "order by timestamp desc, localid desc limit :limit");
+    }
+    else
+    {
+        query.prepare("select * from log "
+                      "where timestamp < :timestamp or "
+                      "(timestamp = :timestamp2 and localid < :localid) "
+                      "order by timestamp desc, localid desc limit :limit");
+        query.bindValue(":timestamp",oldestTimestamp);
+        query.bindValue(":timestamp2",oldestTimestamp);
+        query.bindValue(":localid",oldestId);
+    }
 
-    query.bindValue(":lastid",lastId);
     query.bindValue(":limit",MAX_MESSAGES);
     query.exec();
 
@@ -430,55 +481,25 @@ QList<FMessage> ChatLogger::lastMessages()
 
         list.append(msg);
 
-        lastId = query.value(LOG_LOCALID).toInt();
+        oldestTimestamp = msg.timestamp;
+        oldestId = query.value(LOG_LOCALID).toInt();
     }
-    qint64 endTime = QDateTime::currentDateTime().toMSecsSinceEpoch() - startTime;
-    Utilities::logData("Log retrieved in " + QString::number(endTime) +
-                       " milliseconds.");
+
     return list;
 }
 
+// Raises the status of a logged message (receipts never lower it)
 void ChatLogger::updateLoggedMessage(FMessage message)
 {
     QSqlQuery query(db);
 
-    query.exec("BEGIN TRANSACTION");
-
-    query.prepare("update log set status=:status, msg_count=:msg_count, "
-                "msg_delivered=:msg_delivered, msg_read=:msg_read where id=:id");
+    query.prepare("update log set status=:status where id=:id and status < :status2");
 
     query.bindValue(":id",message.key.id);
     query.bindValue(":status",message.status);
-    query.bindValue(":msg_count",message.count);
-    query.bindValue(":msg_delivered",message.delivered);
-    query.bindValue(":msg_read",message.read);
+    query.bindValue(":status2",message.status);
 
     query.exec();
-
-    Utilities::logData("logMessage(): " + query.lastError().text());
-
-    query.prepare("select localid from log where id=:id");
-    query.bindValue(":id",message.key.id);
-    query.exec();
-
-    query.next();
-    int log_id = query.value(0).toInt();
-
-    for(int i=0; i<message.receipts.size(); i++)
-    {
-        Utilities::logData("UPDATING receipts");
-        query.prepare("insert or replace into receipt (message_id, participant, type, timestamp) "
-                      "values(:message_id, :participant, :type, :timestamp)");
-        query.bindValue(":message_id,", log_id);
-        query.bindValue(":participant", message.receipts.at(i).remote_jid);
-        query.bindValue(":type", message.receipts.at(i).type);
-        query.bindValue(":timestamp", message.receipts.at(i).timestamp);
-        query.exec();
-    }
-
-    Utilities::logData("logMessage(): " + query.lastError().text());
-
-    query.exec("END TRANSACTION");
 }
 
 void ChatLogger::updateUriMessage(FMessage message)
@@ -493,6 +514,36 @@ void ChatLogger::updateUriMessage(FMessage message)
     query.exec();
 }
 
+
+// Stores the preview picture of a media message
+void ChatLogger::updateMediaData(FMessage message)
+{
+    QSqlQuery query(db);
+
+    query.prepare("update log set data=:data where id=:id");
+
+    query.bindValue(":id",message.key.id);
+    query.bindValue(":data",QString::fromUtf8(message.data.toBase64().constData()));
+
+    query.exec();
+}
+
+// Received messages the user has not seen yet, oldest first
+QList<FMessage> ChatLogger::unreadMessages()
+{
+    QList<FMessage> list;
+    QSqlQuery query(db);
+
+    query.prepare("select * from log where from_me=0 and status=:status "
+                  "order by timestamp, localid");
+    query.bindValue(":status",FMessage::Unsent);
+    query.exec();
+
+    while (query.next())
+        list.append(sqlQueryResultToFMessage(jid,query));
+
+    return list;
+}
 
 void ChatLogger::updateDuration(FMessage message)
 {
@@ -510,10 +561,11 @@ void ChatLogger::updateDuration(FMessage message)
 void ChatLogger::deleteAllMessages()
 {
     db.close();
-    QSqlDatabase::removeDatabase(jid);
+    db = QSqlDatabase();
+    QSqlDatabase::removeDatabase(connectionName);
+    connectionName.clear();
 
-    QDir home = QDir::home();
-    QFile file(home.path() + LOGS_DIR + jid.left(jid.indexOf("@")) + LOG_EXTENSION);
+    QFile file(fileName(jid));
 
     file.remove();
 
@@ -536,16 +588,11 @@ FMessage ChatLogger::lastMessage()
     FMessage msg;
 
     query.prepare("select * from log "
-                  "where localid = (select max(localid) from log)");
+                  "order by timestamp desc, localid desc limit 1");
     query.exec();
 
-    if (query.next()) {
+    if (query.next())
         msg = sqlQueryResultToFMessage(jid,query);
-        getMessageReceipts(query, msg);
-    } else {
-        QString s = "no previous message";
-        msg.setData(s);
-    }
 
     return msg;
 }
@@ -555,31 +602,27 @@ FMessage ChatLogger::lastMessage(QString jid)
     FMessage msg;
 
     QString dbName = jid + "_static";
-    QDir home = QDir::home();
-    QFile file(home.path() + LOGS_DIR + jid.left(jid.indexOf("@")) + LOG_EXTENSION);
+    QFile file(fileName(jid));
 
     if (!file.exists())
         return msg;
 
-    // Initialization of databases
-    QSqlDatabase staticDb = QSqlDatabase::addDatabase("QSQLITE",dbName);
-
-    staticDb.setDatabaseName(file.fileName());
-
-    if (staticDb.open())
     {
-        QSqlQuery query(staticDb);
-        query.prepare("select * from log "
-                      "where localid = (select max(localid) from log)");
-        query.exec();
+        QSqlDatabase staticDb = QSqlDatabase::addDatabase("QSQLITE",dbName);
 
-        if (query.next()) {
-            msg = sqlQueryResultToFMessage(jid,query);
-            getMessageReceipts(query, msg);
-        } else {
-            QString s = "no previous message";
-            msg.setData(s);
+        staticDb.setDatabaseName(file.fileName());
+
+        if (staticDb.open())
+        {
+            QSqlQuery query(staticDb);
+            query.prepare("select * from log "
+                          "order by timestamp desc, localid desc limit 1");
+            query.exec();
+
+            if (query.next())
+                msg = sqlQueryResultToFMessage(jid,query);
         }
+        staticDb.close();
     }
 
     QSqlDatabase::removeDatabase(dbName);

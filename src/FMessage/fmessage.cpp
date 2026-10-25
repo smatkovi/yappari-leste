@@ -27,17 +27,17 @@
  */
 
 #include <QDateTime>
+#include <QCryptographicHash>
+#include <QRandomGenerator>
 
-#include "client.h"
-#include "funstore.h"
 #include "key.h"
 #include "fmessage.h"
-#include "util/utilities.h"
 
 QMutex FMessage::mutex;
 
 FMessage::FMessage()
 {
+    clearFields();
     generateTimestamp();
     this->status = Unsent;
     this->type = UndefinedMessage;
@@ -45,6 +45,7 @@ FMessage::FMessage()
 
 FMessage::FMessage(QString remote_jid, QByteArray data, QString thumb_image)
 {
+    clearFields();
     generateTimestamp();
     generateID();
     init(remote_jid, true);
@@ -55,6 +56,7 @@ FMessage::FMessage(QString remote_jid, QByteArray data, QString thumb_image)
 
 FMessage::FMessage(QString remote_jid, QString data, QString thumb_image)
 {
+    clearFields();
     generateTimestamp();
     generateID();
     init(remote_jid, true);
@@ -65,6 +67,7 @@ FMessage::FMessage(QString remote_jid, QString data, QString thumb_image)
 
 FMessage::FMessage(QString remote_jid, bool from_me, QString id)
 {
+    clearFields();
     generateTimestamp();
     init(remote_jid, from_me);
     this->key.id = id;
@@ -73,6 +76,7 @@ FMessage::FMessage(QString remote_jid, bool from_me, QString id)
 
 FMessage::FMessage(QString remote_jid, bool from_me)
 {
+    clearFields();
     generateTimestamp();
     generateID();
     init(remote_jid,from_me);
@@ -88,6 +92,20 @@ void FMessage::init(QString remote_jid, bool from_me)
     this->status = Unsent;
 }
 
+void FMessage::clearFields()
+{
+    timestamp = 0;
+    key.from_me = false;
+    status = Unsent;
+    type = UndefinedMessage;
+    count = delivered = read = 0;
+    latitude = longitude = 0;
+    live = false;
+    media_duration_seconds = 0;
+    media_size = 0;
+    media_wa_type = Undefined;
+}
+
 void FMessage::generateTimestamp()
 {
     mutex.lock();
@@ -95,12 +113,16 @@ void FMessage::generateTimestamp()
     mutex.unlock();
 }
 
+// Message IDs in the form WhatsApp's own clients use ("3EB0" and 18
+// upper-case hex digits), so that the server and receipts accept them.
 void FMessage::generateID()
 {
-    this->key.id = QString::number(timestamp / 1000) + "-" +
-                   QString::number(Client::seq);
+    QByteArray seed = QByteArray::number(timestamp);
+    for (int i = 0; i < 4; i++)
+        seed.append(QByteArray::number(QRandomGenerator::global()->generate()));
 
-    Client::seq++;
+    QByteArray hash = QCryptographicHash::hash(seed, QCryptographicHash::Sha256);
+    this->key.id = "3EB0" + QString::fromLatin1(hash.left(9).toHex().toUpper());
 }
 
 void FMessage::setData(QByteArray data)
@@ -167,6 +189,15 @@ QString FMessage::getMediaWAType()
 
         case Location:
             return "location";
+
+        case Voice:
+            return "voice note";
+
+        case Document:
+            return "document";
+
+        case Sticker:
+            return "sticker";
     }
 
     return "undefined";

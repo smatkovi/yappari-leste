@@ -30,12 +30,15 @@
 #define CHATIMAGEITEM_H
 
 #include <QWidget>
+#include <QPointer>
 
-#include "Whatsapp/fmessage.h"
+#include "FMessage/fmessage.h"
 
 namespace Ui {
     class ChatImageItem;
 }
+
+class AudioPlayer;
 
 class ChatImageItem : public QWidget
 {
@@ -58,6 +61,7 @@ public slots:
     void setImage();
     void setNickname(FMessage message);
     void setTimestamp(FMessage message);
+    void setStatus(int status);
     void setButton();
     void updateTimestamp();
     void updateProgress(float p);
@@ -69,7 +73,8 @@ public slots:
 
 private:
     Ui::ChatImageItem *ui;
-    bool waiting, retryButton;
+    bool waiting, downloading, autoDownload;
+    QPointer<AudioPlayer> player;
 
     FMessage message;
 };

@@ -26,37 +26,29 @@
  * official policies, either expressed or implied, of the copyright holder.
  */
 
-#include <QTextDocumentFragment>
-#include <QMaemo5InformationBox>
 #include <QApplication>
-#include <QClipboard>
 #include <QInputMethodEvent>
+#include <QKeyEvent>
 #include <QDateTime>
 
-#include "Whatsapp/util/utilities.h"
+#include "util/utilities.h"
 
 #include "chattextedit.h"
 #include "client.h"
-
-#include <QX11Info>
-
-#include "Gui/X.h"
-
-#include "hildon-input-method/hildon-im-protocol.h"
-
-#include <X11/Xlib.h>
-#include <X11/Xatom.h>
 
 #define MAX_LINES       5
 
 ChatTextEdit::ChatTextEdit(QWidget *parent) :
     QTextEdit(parent)
 {
+    // Messages are plain text; emoji are characters
+    setAcceptRichText(false);
+
     QFontMetrics metrics(currentFont());
     fontHeight = metrics.height();
 
-    isEmojiWidgetOpen = false;
     isComposing = false;
+    lastKeyPressed = 0;
 
     connect(&composingTimer,SIGNAL(timeout()),
             this,SLOT(verifyPaused()));
@@ -103,63 +95,38 @@ bool ChatTextEdit::eventFilter(QObject *obj, QEvent *event)
             setTextCursor(cursor);
             return true;
         }
-        else if (keyEvent->nativeScanCode() == 36)
+        else if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)
         {
             // Return pressed
             if (Client::enterIsSend && !(keyEvent->modifiers() & Qt::ShiftModifier))
             {
                 isComposing = false;
+                composingTimer.stop();
                 emit returnPressed();
                 return true;
             }
         }
-        else if (keyEvent->nativeScanCode() == 54 &&
-                 keyEvent->modifiers() == Qt::ControlModifier)
-        {
-            // Copy
-            QTextCursor cursor = textCursor();
-            if (cursor.hasSelection())
-            {
-                QTextDocumentFragment selection = cursor.selection();
-                QClipboard *clipboard = QApplication::clipboard();
-                clipboard->setText(Utilities::htmlToWAText(selection.toHtml()));
-
-                QMaemo5InformationBox::information(this,"Copied");
-                return true;
-            }
-        }
-        else if (keyEvent->nativeScanCode() == 55 &&
-                 keyEvent->modifiers() == Qt::ControlModifier)
-        {
-            // Paste event
-            QTextCursor cursor = textCursor();
-            QClipboard *clipboard = QApplication::clipboard();
-
-            cursor.insertHtml(Utilities::WATextToHtml(clipboard->text(),32,false));
-
-            return true;
-        }
-        else if (!isComposing)
-        {
-            isComposing = true;
-            emit composing();
-        }
-        else
+        else if (!keyEvent->text().isEmpty())
         {
             lastKeyPressed = QDateTime::currentMSecsSinceEpoch();
             composingTimer.start(2000);
+
+            if (!isComposing)
+            {
+                isComposing = true;
+                emit composing();
+            }
         }
     }
     else if (event->type() == QEvent::InputMethod)
     {
         QInputMethodEvent *inputEvent = (QInputMethodEvent *) event;
 
-        //Utilities::logData("Commit String: '" + inputEvent->commitString() + "'");
+        // Virtual keyboard: its Enter key commits a line break
         if (inputEvent->commitString() == "\n" && Client::enterIsSend)
         {
-            // Let's hide the keyboard if it was shown
-            QTimer::singleShot(0,this,SLOT(closeKB()));
             isComposing = false;
+            composingTimer.stop();
             emit returnPressed();
             return true;
         }
@@ -168,66 +135,9 @@ bool ChatTextEdit::eventFilter(QObject *obj, QEvent *event)
     return QTextEdit::eventFilter(obj,event);
 }
 
-
-static Window findHildonIm()
-{
-    union
-    {
-        Window *win;
-        unsigned char *val;
-    } value;
-
-    Window result = 0;
-    ulong n = 0;
-    ulong extra = 0;
-    int format = 0;
-    Atom realType;
-
-    int status = XGetWindowProperty(QX11Info::display(), QX11Info::appRootWindow(),
-                    XInternAtom(QX11Info::display(), "_HILDON_IM_WINDOW", False), 0L, 4L, 0,
-                    XA_WINDOW, &realType, &format,
-                    &n, &extra, (unsigned char **) &value.val);
-
-    if (status == Success && realType == XA_WINDOW
-          && format == HILDON_IM_WINDOW_ID_FORMAT && n == 1 && value.win != 0) {
-        result = value.win[0];
-        XFree(value.val);
-    } else {
-        qWarning("QHildonInputContext: Unable to get the Hildon IM window id");
-    }
-
-    return result;
-}
-
-void ChatTextEdit::closeKB()
-{
-    Window w = findHildonIm();
-
-    if (!w)
-        return;
-
-    XEvent ev;
-    memset(&ev, 0, sizeof(XEvent));
-
-    HildonIMActivateMessage *msg = reinterpret_cast<HildonIMActivateMessage *>(&ev.xclient.data);
-
-    ev.xclient.type = ClientMessage;
-    ev.xclient.window = w;
-    ev.xclient.message_type = XInternAtom(QX11Info::display(), "_HILDON_IM_ACTIVATE", False);
-    ev.xclient.format = HILDON_IM_ACTIVATE_FORMAT;
-
-    msg->input_window = winId();
-    msg->app_window = window()->winId();
-    msg->cmd = HILDON_IM_HIDE;
-    msg->trigger = HILDON_IM_TRIGGER_NONE;
-
-    XSendEvent(QX11Info::display(),w,false,NoEventMask,&ev);
-    XSync(QX11Info::display(),false);
-}
-
 void ChatTextEdit::verifyPaused()
 {
-    if ((QDateTime::currentMSecsSinceEpoch() - lastKeyPressed) > 2000)
+    if ((QDateTime::currentMSecsSinceEpoch() - lastKeyPressed) >= 2000)
     {
         composingTimer.stop();
         if (isComposing)
@@ -251,59 +161,9 @@ void ChatTextEdit::textChanged()
 
     double docLines = (docHeight - 8) / fontHeight;
 
-    if (abs(docLines) < MAX_LINES && abs(docLines) != abs(textLines))
+    if (qAbs(docLines) < MAX_LINES && qAbs(docLines) != qAbs(textLines))
     {
         setFixedHeight((docLines * fontHeight) + 39);
         update();
-    }
-}
-
-void ChatTextEdit::addEmoji(QString emojiName)
-{
-    if (isEmojiWidgetOpen && Client::autoCloseEmoji)
-        closeEmojiWidget();
-
-    QTextCursor cursor = textCursor();
-
-    QString html = "<img src=\"/usr/share/yappari/icons/32x32/" + emojiName +".png\" />";
-
-    cursor.insertHtml(html);
-    setFocus();
-}
-
-void ChatTextEdit::setMainWindow(QWidget *mainWindow)
-{
-    this->mainWindow = mainWindow;
-}
-
-void ChatTextEdit::selectEmojiButtonClicked()
-{
-    if (!isEmojiWidgetOpen)
-        openEmojiWidget();
-    else
-        closeEmojiWidget();
-}
-
-void ChatTextEdit::openEmojiWidget()
-{
-    emojiWidget = new SelectEmojiWidget(mainWindow);
-
-    connect(emojiWidget,SIGNAL(emojiSelected(QString)),this,SLOT(addEmoji(QString)));
-
-    isEmojiWidgetOpen = true;
-
-    emojiWidget->show();
-
-    setFocus();
-}
-
-void ChatTextEdit::closeEmojiWidget()
-{
-    if (isEmojiWidgetOpen)
-    {
-        emojiWidget->hide();
-        emojiWidget->deleteLater();
-        isEmojiWidgetOpen = false;
-        setFocus();
     }
 }

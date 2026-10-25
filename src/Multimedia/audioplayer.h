@@ -30,21 +30,17 @@
 #ifndef AUDIOPLAYER_H
 #define AUDIOPLAYER_H
 
-#include <QTimer>
-
-#include <gst/gst.h>
-#include <stdbool.h>
-#include <pulse/proplist.h>
+#include <QObject>
+#include <QMediaPlayer>
 
 /**
     @class      AudioPlayer
 
-    @brief      This class provides a simple audio player using the GStreamer API.
-
-                It includes notifications every second to indicate the current
-                position in the stream (in seconds).
-
-                After the file is played this object is deleted.
+    @brief      This class provides a simple audio player (QtMultimedia,
+                GStreamer underneath). It includes notifications every
+                second to indicate the current position in the stream
+                (in seconds). After the file is played this object is
+                deleted.
 */
 
 class AudioPlayer : public QObject
@@ -52,78 +48,27 @@ class AudioPlayer : public QObject
     Q_OBJECT
 
 public:
-
-    /** ***********************************************************************
-     ** Public members
-     **/
-
-
-    /** ***********************************************************************
-     ** Constructors and destructors
-     **/
-
-    // Creates an AudioPlayer object
     explicit AudioPlayer(QObject *parent = 0);
 
 public slots:
-
-    /** ***********************************************************************
-     ** Public slots methods
-     **/
-
-    // Plays a local file
     void play(QString uri);
-
-    // Queries the current position in the stream played
-    void queryPosition();
-
-    // Free all resources used by this object
-    void freeResources();
+    void stop();
 
 signals:
-
-    /** ***********************************************************************
-     ** Signals
-     **/
-
-    // Progress in seconds in the stream played
     void progress(int current);
-
-    // Stream played completely
     void finished();
-    
+
+private slots:
+    void positionChanged(qint64 position);
+    void stateChanged(QMediaPlayer::State state);
+    void error(QMediaPlayer::Error error);
 
 private:
+    QMediaPlayer *player;
+    int lastSecond;
+    bool done;
 
-    /** ***********************************************************************
-     ** Private members
-     **/
-
-    // GStreamer pipeline used to play the stream
-    GstElement *pipeline;
-
-    // GStreamer plugin to send audio to a PulseAudio server
-    GstElement *pulsesink;
-
-    // GStreamer asynchronous message bus subsystem
-    GstBus *bus;
-
-    // PulseAudio property list
-    pa_proplist *proplist;
-
-    // Timer used to query current position in the stream
-    QTimer *posTimer;
-
-
-    /** ***********************************************************************
-     ** Private methods
-     **/
-
-    // Starts the timer to query current position in the stream
-    void startPosTimer();
-
-    // Stops the timer to query current position in the stream
-    void stopPosTimer();
+    void finish();
 };
 
 #endif // AUDIOPLAYER_H

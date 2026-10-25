@@ -34,7 +34,7 @@
 #include <QString>
 #include <QList>
 
-#include "Whatsapp/fmessage.h"
+#include "FMessage/fmessage.h"
 
 #include "Contacts/contact.h"
 
@@ -49,20 +49,31 @@ public:
     bool init(QString jid);
     QList<FMessage> lastMessages();
     FMessage lastMessage();
+    bool contains(QString id);
+    QList<FMessage> unreadMessages();
+    int logMessages(QList<FMessage> messages);
 
     static FMessage lastMessage(QString jid);
 
 public slots:
-    void logMessage(FMessage message);
+    bool logMessage(FMessage message);
     void updateLoggedMessage(FMessage message);
     void updateUriMessage(FMessage message);
     void updateDuration(FMessage message);
+    void updateMediaData(FMessage message);
     void deleteAllMessages();
     void deleteMessage(FMessage message);
 
 private:
     QString jid;
-    int lastId;
+    QString connectionName;
+
+    // Oldest message shown so far, for loading older ones
+    qint64 oldestTimestamp;
+    int oldestId;
+
+    bool insert(FMessage &message);
+    static QString fileName(QString jid);
 
     static int getMessageReceipts(QSqlQuery& query, FMessage &msg);
     static FMessage sqlQueryResultToFMessage(QString jid,QSqlQuery& query);
