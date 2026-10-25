@@ -119,13 +119,13 @@ void ChatDisplayItem::updateData()
         height = doc.documentLayout()->documentSize().height();
         lineHeight = line.documentLayout()->documentSize().height();
 
-        if (height > lineHeight)
+        if (height > lineHeight * 1.5)
         {
             int spaceIndex = lastLine.lastIndexOf(" ");
             lastLine = lastLine.left( (spaceIndex >= 0) ? spaceIndex : lastLine.length() - 10 ) + "...";
         }
 
-    } while (lastLine.length() > 0 && height > lineHeight);
+    } while (lastLine.length() > 0 && height > lineHeight * 1.5);
 
     QString timeString = (lastMessage.type == FMessage::UndefinedMessage) ? QString() :
                          (DateTimeUtilities::isSameDate(lastMessage.timestamp,QDateTime::currentMSecsSinceEpoch()))

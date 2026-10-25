@@ -94,6 +94,10 @@ SelectContactDialog::SelectContactDialog(ContactList list, QWidget *parent,
 
     ui->lineEdit->hide();
 
+    // A tap picks the contact, like the pickers of Maemo 5
+    connect(ui->listView,SIGNAL(clicked(QModelIndex)),
+            this,SLOT(accept()));
+
 }
 
 SelectContactDialog::~SelectContactDialog()

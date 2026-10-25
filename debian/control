@@ -1,0 +1,30 @@
+Source: yappari-leste
+Section: user/network
+Priority: optional
+Maintainer: Sebastian Matkovich <sebastian.matkovich@gmail.com>
+Build-Depends: debhelper-compat (= 12), pkg-config, qtbase5-dev, qt5-qmake,
+ libqt5maemo5-dev, libqt5x11extras5-dev, qtmultimedia5-dev, libqrencode-dev,
+ libx11-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/smatkovi/yappari-leste
+Vcs-Git: https://github.com/smatkovi/yappari-leste.git
+
+Package: yappari-leste
+Architecture: arm64
+Depends: ${shlibs:Depends}, ${misc:Depends}, dbus, libqt5sql5-sqlite,
+ libqt5multimedia5-plugins
+Recommends: fonts-noto-color-emoji, gstreamer1.0-plugins-base,
+ gstreamer1.0-plugins-good, qt5-image-formats-plugins
+Description: WhatsApp client for Maemo Leste, a port of Yappari
+ Yappari was the WhatsApp client of the Nokia N900 (Maemo 5). This is its
+ user interface ported to Qt 5 on Maemo Leste, with a new connection to
+ WhatsApp: yappari-wa, a small daemon on whatsmeow that speaks today's
+ multi-device protocol. Yappari is linked to an existing WhatsApp account as
+ a linked device (pairing code or QR code), like WhatsApp Web.
+ .
+ Text messages, delivery and read receipts, typing indicators, group chats,
+ pictures, voice notes and files, notifications, and message history kept
+ on the phone. Messages arrive while the window is closed.
+ .
+ Yappari is not affiliated with WhatsApp or Meta.
+XB-Maemo-Display-Name: Yappari

@@ -1,0 +1,3 @@
+data/yappari.desktop usr/share/applications/hildon
+data/org.yappari.WhatsApp.service usr/share/dbus-1/services
+data/org.yappari.Yappari.service usr/share/dbus-1/services

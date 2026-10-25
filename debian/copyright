@@ -1,0 +1,75 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: yappari-leste
+Source: https://github.com/smatkovi/yappari-leste
+Comment:
+ Yappari for Maemo Leste is a port of Yappari 2.0.27 for Maemo 5
+ (https://github.com/agamez/yappari). Most source files of Yappari carry a
+ BSD 2-clause notice, while the Debian packaging of Yappari declared the
+ package GPL-2+; both are reproduced below.
+ .
+ The binary package also contains yappari-wa, built from backend/ with Go.
+ It statically links third-party Go modules, among them whatsmeow
+ (MPL-2.0) and go.mau.fi/libsignal (GPL-3.0), so the yappari-wa binary as
+ a whole is distributed under the GPL-3.0. The exact module versions are
+ listed in backend/go.mod and backend/go.sum.
+
+Files: *
+Copyright: 2012-2014 Naikel Aparicio (Scorpius) <naikel@gmail.com>
+           2014-2015 Alvaro Gamez <alvaro.gamez@hazent.com>
+License: BSD-2-Clause and GPL-2+
+
+Files: src/WhatsApp/*
+       src/Gui/linkwindow.*
+       src/Gui/imageviewer.*
+       src/Gui/emojidialog.*
+       backend/*
+       tools/*
+       debian/*
+Copyright: 2026 Sebastian Matkovich <sebastian.matkovich@gmail.com>
+License: BSD-2-Clause
+
+Files: backend/yappari-wa
+Copyright: 2026 Sebastian Matkovich
+           Tulir Asokan and the whatsmeow contributors (go.mau.fi/whatsmeow)
+           the authors of the Go modules listed in backend/go.sum
+License: GPL-3
+Comment: Built binary, see the Comment field in the header.
+
+License: BSD-2-Clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+ .
+ 1. Redistributions of source code must retain the above copyright notice,
+    this list of conditions and the following disclaimer.
+ .
+ 2. Redistributions in binary form must reproduce the above copyright notice,
+    this list of conditions and the following disclaimer in the documentation
+    and/or other materials provided with the distribution.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ''AS IS'' AND ANY EXPRESS
+ OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+ EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+ INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: GPL-2+
+ This package is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 2 can be found in "/usr/share/common-licenses/GPL-2".
+
+License: GPL-3
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, version 3.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 can be found in "/usr/share/common-licenses/GPL-3".

@@ -113,6 +113,10 @@ void ChatArea::insertMessageAtBottom(FMessage message)
 
 void ChatArea::insertMessage(FMessage message, bool atTop)
 {
+    // Messages shown live may come again when older ones are loaded
+    if (widgets.contains(message.key))
+        return;
+
     atBottom = (verticalScrollBar()->value() == verticalScrollBar()->maximum());
 
     if (message.type == FMessage::BodyMessage)

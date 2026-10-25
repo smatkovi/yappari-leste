@@ -31,6 +31,7 @@
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QScrollArea;
 
 /**
     @class      LinkWindow
@@ -60,6 +61,7 @@ private slots:
     void pairingCode(QString code);
     void qrCode(QString code);
     void linkError(QString error);
+    void showQR();
     void stateChanged(QString state);
 
 private:
@@ -71,6 +73,7 @@ private:
     QLabel *qrLabel;
     QLabel *qrHelp;
     QLabel *statusLabel;
+    QScrollArea *scrollArea;
     bool qrWanted;
     bool linked;
 };

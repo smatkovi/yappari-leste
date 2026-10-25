@@ -46,7 +46,6 @@ public:
     explicit ChatArea(QWidget *parent = 0);
     void init();
     void loadLogMessages(QList<FMessage> messages);
-    void goToBottom();
     void requestUpdateTimestamps();
     bool isMessageInUI(FMessage msg);
 
@@ -62,6 +61,7 @@ signals:
     void contextMenuRequested(QPoint p, QObject *obj);
 
 public slots:
+    void goToBottom();
     void insertMessageAtTop(FMessage message);
     void insertMessageAtBottom(FMessage message);
     void mediaDownloadHandler(FMessage message);

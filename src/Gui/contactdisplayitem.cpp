@@ -72,10 +72,12 @@ ContactDisplayItem::ContactDisplayItem(Contact *c) :
     setData(c->jid,Qt::UserRole + 1);
     setData(name + " " + c->phone,Qt::UserRole + 3);
 
-    if (c->photoId.isEmpty())
-        setData(QImage("/usr/share/icons/hicolor/64x64/hildon/general_default_avatar.png"), Qt::UserRole);
-    else
+    if (!c->photo.isNull())
         setData(c->photo, Qt::UserRole);
+    else if (c->type == Contact::TypeGroup)
+        setData(QImage("/usr/share/yappari/icons/64x64/general_conference_avatar.png"), Qt::UserRole);
+    else
+        setData(QImage("/usr/share/icons/hicolor/64x64/hildon/general_default_avatar.png"), Qt::UserRole);
 
 }
 

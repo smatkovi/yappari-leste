@@ -145,8 +145,9 @@ ChatWindow::ChatWindow(Contact *contact, QWidget *parent) :
 
     readMoreLogLines();
 
-    qApp->processEvents();
-    ui->scrollArea->goToBottom();
+    // After the layout is done. No processEvents() here: D-Bus replies for
+    // this chat could be handled before the window is registered.
+    QTimer::singleShot(0, ui->scrollArea, SLOT(goToBottom()));
 
     connect(ui->textEdit,SIGNAL(paused()),
             this,SLOT(myselfPaused()));

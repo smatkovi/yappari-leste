@@ -32,6 +32,7 @@
 #include <QPainter>
 #include <QLabel>
 #include <QFrame>
+#include <QTimer>
 
 #include <qrencode.h>
 
@@ -92,16 +93,19 @@ LinkWindow::LinkWindow(QWidget *parent) :
     qrButton = new QPushButton("Use a QR code instead");
     layout->addWidget(qrButton);
 
+    // Code and explanation side by side: the screen is wide, not tall
+    QHBoxLayout *qrRow = new QHBoxLayout;
+    qrLabel = new QLabel;
+    qrLabel->setAlignment(Qt::AlignCenter);
+    qrLabel->hide();
+    qrRow->addWidget(qrLabel);
+
     qrHelp = new QLabel("On your main phone open WhatsApp: Settings → Linked devices → "
                         "Link a device, and scan this code.");
     qrHelp->setWordWrap(true);
     qrHelp->hide();
-    layout->addWidget(qrHelp);
-
-    qrLabel = new QLabel;
-    qrLabel->setAlignment(Qt::AlignCenter);
-    qrLabel->hide();
-    layout->addWidget(qrLabel);
+    qrRow->addWidget(qrHelp, 1);
+    layout->addLayout(qrRow);
 
     statusLabel = new QLabel;
     statusLabel->setWordWrap(true);
@@ -109,7 +113,7 @@ LinkWindow::LinkWindow(QWidget *parent) :
 
     layout->addStretch();
 
-    QScrollArea *scrollArea = new QScrollArea;
+    scrollArea = new QScrollArea;
     scrollArea->setWidget(page);
     scrollArea->setWidgetResizable(true);
     QScroller::grabGesture(scrollArea->viewport(), QScroller::LeftMouseButtonGesture);
@@ -189,7 +193,9 @@ void LinkWindow::qrCode(QString code)
         return;
     }
 
-    QImage image = qrImage(code, 420);
+    // As large as the screen allows, but it has to fit without scrolling
+    int size = qBound(200, scrollArea->viewport()->height() - 20, 420);
+    QImage image = qrImage(code, size);
     if (image.isNull())
         qrLabel->setText(code);
     else
@@ -198,6 +204,13 @@ void LinkWindow::qrCode(QString code)
     qrLabel->show();
     qrHelp->show();
     statusLabel->clear();
+
+    QTimer::singleShot(0, this, SLOT(showQR()));
+}
+
+void LinkWindow::showQR()
+{
+    scrollArea->ensureWidgetVisible(qrLabel, 0, 10);
 }
 
 void LinkWindow::linkError(QString error)

@@ -3,11 +3,13 @@ Encoding=UTF-8
 Version=1.0
 Type=Application
 Name=Yappari
-Exec=/usr/bin/Yappari
+GenericName=WhatsApp client
+Comment=Chat with WhatsApp as a linked device
+Exec=/usr/bin/yappari
 Icon=yappari
 StartupWMClass=yappari
 X-Window-Icon=yappari
 X-HildonDesk-ShowInToolbar=true
 X-Osso-Type=application/x-executable
 Terminal=false
-
+Categories=Network;InstantMessaging;
