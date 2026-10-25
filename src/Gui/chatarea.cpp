@@ -32,6 +32,8 @@
 #include <QContextMenuEvent>
 #include <QDesktopServices>
 #include <QScroller>
+#include <QGestureEvent>
+#include <QTapAndHoldGesture>
 #include <QTimer>
 #include <QMenu>
 #include <QUrl>
@@ -147,6 +149,7 @@ void ChatArea::insertBodyMessage(FMessage message, bool atTop)
 {
     ChatTextItem *textItem = new ChatTextItem(message,container);
     textItem->installEventFilter(this);
+    textItem->grabGesture(Qt::TapAndHoldGesture);
     textItem->setObjectName("ChatTextItem");
     connect(this,SIGNAL(updateTimestamps()),textItem,SLOT(updateTimestamp()));
 
@@ -159,6 +162,7 @@ void ChatArea::insertMediaMessage(FMessage message, bool atTop)
     {
         ChatImageItem *imageItem = new ChatImageItem(message,container);
         imageItem->installEventFilter(this);
+    imageItem->grabGesture(Qt::TapAndHoldGesture);
         imageItem->setObjectName("ChatImageItem");
 
         connect(this,SIGNAL(updateTimestamps()),imageItem,SLOT(updateTimestamp()));
@@ -323,6 +327,24 @@ bool ChatArea::event(QEvent *e)
 */
 bool ChatArea::eventFilter(QObject *obj, QEvent *event)
 {
+    // Tap and hold on a message opens its context menu
+    if (event->type() == QEvent::Gesture &&
+        (obj->objectName() == "ChatTextItem" || obj->objectName() == "ChatImageItem"))
+    {
+        QGestureEvent *gestureEvent = static_cast<QGestureEvent*> (event);
+        QGesture *gesture = gestureEvent->gesture(Qt::TapAndHoldGesture);
+        if (gesture)
+        {
+            gestureEvent->accept(gesture);
+            if (gesture->state() == Qt::GestureFinished)
+            {
+                QPoint pos = static_cast<QTapAndHoldGesture*>(gesture)->position().toPoint();
+                emit contextMenuRequested(pos, obj);
+            }
+            return true;
+        }
+    }
+
     if (obj != container && event->type() == QEvent::ContextMenu)
     {
         if (obj->objectName() == "ChatTextItem" || obj->objectName() == "ChatImageItem")

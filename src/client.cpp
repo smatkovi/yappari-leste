@@ -95,6 +95,9 @@ ContactRoster *Client::roster;
 // Connection to the yappari-wa daemon
 WAConnection *Client::connection;
 
+// Sending attempts for a message before giving up
+#define MAX_SEND_ATTEMPTS           3
+
 // Ask WhatsApp for the group list at most this often
 #define GROUPS_REQUEST_INTERVAL     60000
 
@@ -405,10 +408,23 @@ void Client::receiptReceived(QString chat, QString sender, QStringList ids,
     }
     else if (type == "error")
     {
-        // Not sent: try again with the next connection
+        // Not sent: try again with the next connection, at most a few times
         foreach (QString id, ids)
-            if (sentMessages.contains(id))
+        {
+            if (!sentMessages.contains(id))
+                continue;
+
+            int attempts = ++sendAttempts[id];
+            if (attempts < MAX_SEND_ATTEMPTS)
                 pendingMessages.insert(id, sentMessages.value(id));
+            else
+            {
+                sentMessages.remove(id);
+                sendAttempts.remove(id);
+                QMaemo5InformationBox::information(mainWin, "A message could not be sent.",
+                                                   QMaemo5InformationBox::DefaultTimeout);
+            }
+        }
         Utilities::logData("Sending failed for " + ids.join(" "));
         return;
     }
@@ -418,7 +434,10 @@ void Client::receiptReceived(QString chat, QString sender, QStringList ids,
     foreach (QString id, ids)
     {
         if (status == FMessage::ReceivedByServer)
+        {
             sentMessages.remove(id);
+            sendAttempts.remove(id);
+        }
 
         FMessage msg(chat, fromMe, id);
         msg.status = status;

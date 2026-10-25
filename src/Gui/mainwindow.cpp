@@ -33,6 +33,8 @@
 #include <QCloseEvent>
 #include <QContextMenuEvent>
 #include <QScroller>
+#include <QGestureEvent>
+#include <QTapAndHoldGesture>
 #include <QMenu>
 
 #include "Contacts/group.h"
@@ -69,6 +71,10 @@ MainWindow::MainWindow(ContactRoster *roster, QWidget *parent) :
     ui->listView->installEventFilter(this);
     ui->listView->setContextMenuPolicy(Qt::DefaultContextMenu);
     QScroller::grabGesture(ui->listView->viewport(), QScroller::LeftMouseButtonGesture);
+
+    // Tap and hold opens the context menu, as on Maemo 5
+    ui->listView->viewport()->grabGesture(Qt::TapAndHoldGesture);
+    ui->listView->viewport()->installEventFilter(this);
 
     ChatDisplayDelegate *delegate = new ChatDisplayDelegate(ui->listView);
 
@@ -665,7 +671,21 @@ void MainWindow::contactsUpdated()
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
-    if (event->type() == QEvent::ContextMenu) {
+    if (event->type() == QEvent::Gesture) {
+        QGestureEvent *gestureEvent = static_cast<QGestureEvent*> (event);
+        QGesture *gesture = gestureEvent->gesture(Qt::TapAndHoldGesture);
+        if (gesture)
+        {
+            gestureEvent->accept(gesture);
+            if (gesture->state() == Qt::GestureFinished)
+            {
+                QPoint pos = static_cast<QTapAndHoldGesture*>(gesture)->position().toPoint();
+                emit sendRightButtonClicked(pos);
+            }
+            return true;
+        }
+    }
+    else if (event->type() == QEvent::ContextMenu) {
         QContextMenuEvent *menuEvent = static_cast<QContextMenuEvent*> (event);
         emit sendRightButtonClicked(menuEvent->globalPos());
         return true;

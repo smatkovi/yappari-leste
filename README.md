@@ -43,8 +43,8 @@ Developed and tested on an F(x)tec Pro1X (arm64) with Maemo Leste
   running when Yappari is closed, so messages keep arriving. While the UI
   is not on the bus, the daemon stores incoming messages and receipts and
   shows a notification for each new message; Yappari fetches the stored
-  ones when it starts (`ReplayQueued`). Tapping such a notification
-  starts Yappari through `org.yappari.Yappari`.
+  ones when it starts (`ReplayQueued`). The notification asks Hildon to
+  start Yappari through `org.yappari.Yappari` when tapped.
 * Closing Yappari's main window only hides it, as on the N900; **Quit** in
   the menu ends the UI. There is no autostart at boot: after a reboot,
   the daemon starts together with Yappari.
@@ -94,6 +94,8 @@ on the phone stay.
   messages, muting chats.
 * Messages are stored on the phone (Yappari's SQLite logs), also those
   sent from your other devices.
+* Tap and hold a chat in the list to delete it, a message to copy,
+  forward or delete it.
 
 ## What is gone or not done
 
@@ -108,6 +110,17 @@ at boot, and Yappari's emoji picture sets (emoji are text now, drawn by
 the system's emoji font; install `fonts-noto-color-emoji` for colour
 emoji). Not implemented: reactions, edits, deletions, replies/quotes,
 polls, calls.
+
+Known limitations of this version:
+
+* WhatsApp now often addresses people by hidden user IDs (`@lid`).
+  yappari-wa translates them to phone numbers when WhatsApp has sent the
+  mapping; until then such a chat shows up under the hidden ID, apart
+  from the chat with the same person's number.
+* A message the server refuses is tried again on the next two
+  connections, then given up with a notice.
+* Read receipts are sent one message at a time.
+* Yappari does not start at boot.
 
 ## Data
 

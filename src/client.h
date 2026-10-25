@@ -184,6 +184,7 @@ private:
     // Messages that could not be sent, retried on the next connection
     QHash<QString,FMessage> pendingMessages;
     QHash<QString,FMessage> sentMessages;
+    QHash<QString,int> sendAttempts;
 
     // History messages waiting to be stored, per chat
     QHash<QString,QList<FMessage> > historyQueue;

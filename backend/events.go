@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
@@ -126,14 +127,20 @@ func (s *Service) handleHistory(e *events.HistorySync) {
 		if err != nil {
 			continue
 		}
-		n := 0
+		// Keep the newest messages, whatever order WhatsApp sent them in
+		var msgs []*events.Message
 		for _, hm := range conv.GetMessages() {
+			if evt, err := s.cli.ParseWebMessage(chatJID, hm.GetMessage()); err == nil {
+				msgs = append(msgs, evt)
+			}
+		}
+		sort.SliceStable(msgs, func(i, j int) bool {
+			return msgs[i].Info.Timestamp.After(msgs[j].Info.Timestamp)
+		})
+		n := 0
+		for _, evt := range msgs {
 			if n >= historyPerChat {
 				break
-			}
-			evt, err := s.cli.ParseWebMessage(chatJID, hm.GetMessage())
-			if err != nil {
-				continue
 			}
 			if s.emitMessage("History", evt) {
 				n++
