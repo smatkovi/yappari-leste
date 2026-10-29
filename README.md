@@ -48,6 +48,11 @@ Developed and tested on an F(x)tec Pro1X (arm64) with Maemo Leste
 * Closing Yappari's main window only hides it, as on the N900; **Quit** in
   the menu ends the UI. There is no autostart at boot: after a reboot,
   the daemon starts together with Yappari.
+* `yappari-wa -stdio` runs without a session bus: the same methods and
+  signals as JSON lines on standard input and output (`backend/stdio.go`),
+  for user interfaces without D-Bus, such as the messenger of
+  [KolibriOS for ARM](https://github.com/smatkovi/kolibrios-arm), which
+  runs the daemon as a Linux program.
 
 ## Linking your WhatsApp account
 
