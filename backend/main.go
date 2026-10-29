@@ -4,7 +4,9 @@
 // This daemon speaks the current multi-device protocol through whatsmeow
 // and offers it to the Yappari UI on the session bus, shaped after the
 // slots and signals of Yappari's former Connection class. It is started
-// by D-Bus activation and keeps running when the UI is closed.
+// by D-Bus activation and keeps running when the UI is closed. Started
+// with -stdio, it needs no bus: the same methods and signals as JSON lines
+// on its standard input and output (stdio.go).
 //
 //	org.yappari.WhatsApp  /org/yappari/WhatsApp  org.yappari.WhatsApp
 //
@@ -72,6 +74,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -103,6 +106,7 @@ const (
 type Service struct {
 	cli      *whatsmeow.Client
 	conn     *dbus.Conn
+	stdio    *stdioBus // -stdio: no session bus
 	cacheDir string
 	queue    *Queue
 	quit     chan struct{}
@@ -135,8 +139,18 @@ func (s *Service) setState(state string) {
 	s.state = state
 	s.mu.Unlock()
 	if changed {
-		s.conn.Emit(objPath, iface+".StateChanged", state)
+		s.signal("StateChanged", state)
 	}
+}
+
+// signal sends a signal of the interface to the UI, on the bus or on
+// standard output (-stdio)
+func (s *Service) signal(name string, args ...interface{}) {
+	if s.stdio != nil {
+		s.stdio.signal(name, args...)
+		return
+	}
+	s.conn.Emit(objPath, iface+"."+name, args...)
 }
 
 // restart makes the daemon exit shortly after a logout, so that the next
@@ -183,6 +197,12 @@ const introspection = `
 const messageArgs = `<arg name="id" type="s"/><arg name="chat" type="s"/><arg name="sender" type="s"/><arg name="pushname" type="s"/><arg name="time" type="x"/><arg name="fromme" type="b"/><arg name="type" type="s"/><arg name="text" type="s"/><arg name="mime" type="s"/><arg name="size" type="x"/>`
 
 func main() {
+	stdio := flag.Bool("stdio", false, "no session bus: the interface as JSON lines on stdin and stdout")
+	flag.Parse()
+	var bus *stdioBus
+	if *stdio {
+		bus = newStdioBus()
+	}
 	ctx := context.Background()
 	stateDir := dataDir("XDG_DATA_HOME", ".local/share")
 	os.MkdirAll(stateDir, 0700)
@@ -208,21 +228,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	conn, err := dbus.ConnectSessionBus()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "yappari-wa: session bus:", err)
-		os.Exit(1)
-	}
-	s := &Service{cli: whatsmeow.NewClient(device, log), conn: conn, queue: queue,
+	s := &Service{cli: whatsmeow.NewClient(device, log), queue: queue, stdio: bus,
 		cacheDir: dataDir("XDG_CACHE_HOME", ".cache"), state: "logged-out", quit: make(chan struct{})}
 	s.cli.AddEventHandler(s.handle)
-	conn.Export(s, objPath, iface)
-	conn.Export(introspect.Introspectable(introspection), objPath, "org.freedesktop.DBus.Introspectable")
-
-	reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
-	if err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
-		fmt.Fprintln(os.Stderr, "yappari-wa: already running")
-		os.Exit(0)
+	if bus != nil {
+		go bus.serve(s)
+	} else {
+		conn, err := dbus.ConnectSessionBus()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "yappari-wa: session bus:", err)
+			os.Exit(1)
+		}
+		s.conn = conn
+		conn.Export(s, objPath, iface)
+		conn.Export(introspect.Introspectable(introspection), objPath, "org.freedesktop.DBus.Introspectable")
+		reply, err := conn.RequestName(busName, dbus.NameFlagDoNotQueue)
+		if err != nil || reply != dbus.RequestNameReplyPrimaryOwner {
+			fmt.Fprintln(os.Stderr, "yappari-wa: already running")
+			os.Exit(0)
+		}
 	}
 
 	// With a session, connect right away; without one, GetQR/PairPhone connect.

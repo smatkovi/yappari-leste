@@ -120,7 +120,7 @@ func (s *Service) runPairing(p *pairSession, qr <-chan whatsmeow.QRChannelItem) 
 		code := p.code
 		s.pairMu.Unlock()
 		if item.Event != "success" {
-			s.conn.Emit(objPath, iface+".QRCode", code)
+			s.signal("QRCode", code)
 		}
 		signalReady()
 	}

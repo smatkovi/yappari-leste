@@ -158,6 +158,9 @@ func decodeArgs(name, raw string) ([]interface{}, error) {
 
 // uiPresent tells whether the Yappari UI is running on the session bus.
 func (s *Service) uiPresent() bool {
+	if s.stdio != nil {
+		return true // the other end of standard output
+	}
 	var has bool
 	err := s.conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, uiName).Store(&has)
 	return err == nil && has
@@ -173,7 +176,7 @@ func (s *Service) emit(name string, args ...interface{}) {
 			return
 		}
 	}
-	s.conn.Emit(objPath, iface+"."+name, args...)
+	s.signal(name, args...)
 }
 
 var notifyIDs = map[string]uint32{}
