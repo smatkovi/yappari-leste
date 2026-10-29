@@ -42,6 +42,10 @@ int main(int argc, char *argv[])
     Client *client = 0;
     int retval = 0;
 
+    // Not as root (its data would belong to root in the user's home);
+    // FreeBSD on the Pro1X runs its whole X session as root, where this
+    // is the only user there is
+#ifndef Q_OS_FREEBSD
     if (qgetenv("USER") == "root")
     {
         QMessageBox msg;
@@ -51,6 +55,7 @@ int main(int argc, char *argv[])
 
         return -1;
     }
+#endif
 
     a.setApplicationName(YAPPARI_APPLICATION_NAME);
     a.setApplicationVersion(VERSION);
