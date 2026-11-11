@@ -145,10 +145,12 @@ too old for whatsmeow, so it is cross-built on a PC:
 
 ```sh
 make backend      # backend/yappari-wa for arm64, static, no cgo
+make backend GOARCH=arm GOARM=7   # the same for armhf (Nokia N950/N9)
 make test         # go vet and the unit tests of the daemon
 ```
 
-The package is then built on the phone (or in an arm64 Leste chroot):
+The package is then built on the phone (or in a Leste chroot of the same
+architecture):
 
 ```sh
 apt-get install --no-install-recommends debhelper pkg-config qtbase5-dev \
@@ -157,7 +159,7 @@ apt-get install --no-install-recommends debhelper pkg-config qtbase5-dev \
 dpkg-buildpackage -b -us -uc     # with backend/yappari-wa in the tree
 ```
 
-This gives `yappari-leste_3.0.0_arm64.deb`. Without packaging,
+This gives `yappari-leste_3.0.0_arm64.deb` (or `_armhf.deb`). Without packaging,
 `cd src && qmake && make` builds the UI alone.
 
 ### Testing without a WhatsApp account

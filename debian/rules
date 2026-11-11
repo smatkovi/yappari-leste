@@ -1,6 +1,11 @@
 #!/usr/bin/make -f
 
 include /usr/share/dpkg/pkg-info.mk
+include /usr/share/dpkg/architecture.mk
+
+# readelf's "Machine:" of yappari-wa for the package's architecture
+ELF_MACHINE_arm64 := AArch64
+ELF_MACHINE_armhf := ARM
 
 export QT_SELECT := qt5
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
@@ -16,7 +21,7 @@ override_dh_auto_configure:
 override_dh_auto_install:
 	dh_auto_install
 	@test -x backend/yappari-wa || { echo "backend/yappari-wa is missing: build it first (README.md)"; exit 1; }
-	@readelf -h backend/yappari-wa | grep -q AArch64 || { echo "backend/yappari-wa is not an arm64 binary"; exit 1; }
+	@readelf -h backend/yappari-wa | grep -q "Machine: *$(ELF_MACHINE_$(DEB_HOST_ARCH))$$" || { echo "backend/yappari-wa is not an $(DEB_HOST_ARCH) binary"; exit 1; }
 	install -D -m 0755 backend/yappari-wa debian/yappari-leste/usr/libexec/yappari/yappari-wa
 
 # The Go binary is stripped already and has no DWARF for dwz

@@ -10,7 +10,7 @@ Homepage: https://github.com/smatkovi/yappari-leste
 Vcs-Git: https://github.com/smatkovi/yappari-leste.git
 
 Package: yappari-leste
-Architecture: arm64
+Architecture: arm64 armhf
 Depends: ${shlibs:Depends}, ${misc:Depends}, dbus, libqt5sql5-sqlite,
  libqt5multimedia5-plugins, qt-platform-maemo
 Recommends: qt-input-maemo, fonts-noto-color-emoji, gstreamer1.0-plugins-base,
